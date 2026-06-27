@@ -5,7 +5,6 @@ import com.agent.core.agent.plan.PlanAndExecuteAgent;
 import com.agent.core.agent.react.ReactAgent;
 import com.agent.core.llm.LLMClient;
 import com.agent.core.llm.OpenAILLMClient;
-import com.agent.core.memory.InMemoryStore;
 import com.agent.core.tool.builtin.CalculatorTool;
 import com.agent.core.tool.builtin.DateTimeTool;
 import com.agent.core.tool.builtin.WebFetchTool;
@@ -60,8 +59,6 @@ public class ExampleApp {
         ReactAgent agent = new ReactAgent(
                 llmClient,
                 toolRegistry,
-                new InMemoryStore(),
-                null,
                 10
         );
 
@@ -81,7 +78,6 @@ public class ExampleApp {
         PlanAndExecuteAgent agent = new PlanAndExecuteAgent(
                 llmClient,
                 toolRegistry,
-                new InMemoryStore(),
                 10,
                 true
         );

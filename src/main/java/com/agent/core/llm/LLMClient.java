@@ -22,6 +22,16 @@ public interface LLMClient {
     LLMResponse chat(List<Message> messages, List<ToolDefinition> tools);
 
     /**
+     * Send messages to the LLM and get a response with custom parameters.
+     *
+     * @param messages the conversation history
+     * @param tools    available tools for the LLM to use
+     * @param params   custom LLM parameters (temperature, topP, etc.)
+     * @return the LLM response
+     */
+    LLMResponse chat(List<Message> messages, List<ToolDefinition> tools, LLMParams params);
+
+    /**
      * Send messages to the LLM without tools.
      *
      * @param messages the conversation history
