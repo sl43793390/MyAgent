@@ -65,7 +65,7 @@ java-agent/
 ## Prerequisites
 
 - Java 21 or higher
-- Maven 3.6+
+- Maven 3.8+
 - OpenAI API key (or compatible API)
 
 ## Installation
