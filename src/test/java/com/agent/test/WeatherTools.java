@@ -3,6 +3,9 @@ package com.agent.test;
 import com.agent.core.tool.annotation.Tool;
 import com.agent.core.tool.annotation.ToolParam;
 
+/**
+ * Example custom tool class for weather queries.
+ */
 class WeatherTools {
 
     @Tool(name = "get_weather", description = "Get current weather for a city")
