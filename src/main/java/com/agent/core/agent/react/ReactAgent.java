@@ -3,8 +3,8 @@ package com.agent.core.agent.react;
 import com.agent.core.agent.AgentResult;
 import com.agent.core.agent.BaseAgent;
 import com.agent.core.llm.LLMClient;
+import com.agent.core.llm.LLMParams;
 import com.agent.core.memory.Memory;
-import com.agent.core.memory.InMemoryStore;
 import com.agent.core.model.*;
 import com.agent.core.tool.ToolRegistry;
 
@@ -17,7 +17,7 @@ import com.agent.core.tool.ToolRegistry;
  * 3. The tool result is observed and fed back (Observation)
  * 4. The loop continues until the LLM decides to provide a final answer
  *
- * This continues until the LLM provides a final answer without tool calls.
+ * Thread-safe: Each run() invocation creates its own execution context.
  */
 public class ReactAgent extends BaseAgent {
 
@@ -38,12 +38,17 @@ public class ReactAgent extends BaseAgent {
     private final int maxIterations;
 
     public ReactAgent(LLMClient llmClient, ToolRegistry toolRegistry, int maxIterations) {
-        this(llmClient, toolRegistry, new InMemoryStore(), DEFAULT_SYSTEM_PROMPT, maxIterations);
+        this(llmClient, toolRegistry, DEFAULT_SYSTEM_PROMPT, maxIterations, LLMParams.DEFAULT);
     }
 
-    public ReactAgent(LLMClient llmClient, ToolRegistry toolRegistry, Memory memory,
-                      String systemPrompt, int maxIterations) {
-        super(llmClient, toolRegistry, memory, systemPrompt);
+    public ReactAgent(LLMClient llmClient, ToolRegistry toolRegistry, String systemPrompt,
+                      int maxIterations) {
+        this(llmClient, toolRegistry, systemPrompt, maxIterations, LLMParams.DEFAULT);
+    }
+
+    public ReactAgent(LLMClient llmClient, ToolRegistry toolRegistry, String systemPrompt,
+                      int maxIterations, LLMParams llmParams) {
+        super(llmClient, toolRegistry, systemPrompt, llmParams);
         this.maxIterations = maxIterations;
     }
 
@@ -51,14 +56,25 @@ public class ReactAgent extends BaseAgent {
     public AgentResult run(String userInput) {
         log.info("ReactAgent started with input: {}", userInput);
 
-        // Initialize system prompt if memory is empty
-        if (memory.size() == 0) {
-            initSystemPrompt();
-        }
+        // Create local execution context for thread safety
+        Memory context = createContext();
+        context.add(Message.user(userInput));
 
-        // Add user message
-        memory.add(Message.user(userInput));
+        return executeWithContext(context);
+    }
 
+    @Override
+    public AgentResult run(String userInput, String sessionId) {
+        log.info("ReactAgent started with input: {} (session: {})", userInput, sessionId);
+
+        // Get or create session context for multi-turn conversation
+        Memory context = getSessionContext(sessionId);
+        context.add(Message.user(userInput));
+
+        return executeWithContext(context);
+    }
+
+    private AgentResult executeWithContext(Memory context) {
         int totalTokens = 0;
         int step = 0;
 
@@ -71,12 +87,11 @@ public class ReactAgent extends BaseAgent {
                 observer.onStepStart(step, "react");
             }
 
-            // Call LLM
-            LLMResponse response = callLLM();
+            LLMResponse response = callLLM(context);
             totalTokens += response.totalTokens();
 
             Message assistantMessage = response.message();
-            memory.add(assistantMessage);
+            context.add(assistantMessage);
 
             // Check if the LLM wants to use tools
             if (response.hasToolCalls()) {
@@ -95,8 +110,8 @@ public class ReactAgent extends BaseAgent {
 
 //                    log.info("Tool result: {}", truncate(toolResult, 200));
 
-                    // Add tool result to memory
-                    memory.add(Message.tool(toolResult, toolCall.id(), toolCall.name()));
+                    // Add tool result to context
+                    context.add(Message.tool(toolResult, toolCall.id(), toolCall.name()));
                 }
             } else {
                 // Notify observer

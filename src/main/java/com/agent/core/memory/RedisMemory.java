@@ -1,6 +1,8 @@
 package com.agent.core.memory;
 
+import com.agent.core.llm.LLMClient;
 import com.agent.core.model.Message;
+import com.agent.core.model.Role;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
@@ -26,6 +28,9 @@ public class RedisMemory implements Memory {
     private final String key;
     private final int ttlSeconds;
     private final int maxMessages;
+    private final long compressionTokenThreshold;
+    private LLMClient compressionLLMClient;
+    private String compressionPrompt;
 
     /**
      * Create Redis memory with default settings.
@@ -35,7 +40,7 @@ public class RedisMemory implements Memory {
      * @param key  Redis key for storing messages
      */
     public RedisMemory(String host, int port, String key) {
-        this(host, port, key, 0, Integer.MAX_VALUE);
+        this(host, port, key, 0, 30, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
@@ -47,7 +52,7 @@ public class RedisMemory implements Memory {
      * @param ttlSeconds TTL in seconds (0 for no expiration)
      */
     public RedisMemory(String host, int port, String key, int ttlSeconds) {
-        this(host, port, key, ttlSeconds, Integer.MAX_VALUE);
+        this(host, port, key, ttlSeconds, 30, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
@@ -60,6 +65,21 @@ public class RedisMemory implements Memory {
      * @param maxMessages maximum number of messages to retain
      */
     public RedisMemory(String host, int port, String key, int ttlSeconds, int maxMessages) {
+        this(host, port, key, ttlSeconds, maxMessages, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+    }
+
+    /**
+     * Create Redis memory with all parameters.
+     *
+     * @param host                       Redis host
+     * @param port                       Redis port
+     * @param key                        Redis key for storing messages
+     * @param ttlSeconds                 TTL in seconds (0 for no expiration)
+     * @param maxMessages                maximum number of messages to retain
+     * @param compressionTokenThreshold  token threshold to trigger compression
+     */
+    public RedisMemory(String host, int port, String key, int ttlSeconds, int maxMessages,
+                       long compressionTokenThreshold) {
         JedisPoolConfig config = new JedisPoolConfig();
         config.setMaxTotal(10);
         config.setMaxIdle(5);
@@ -70,6 +90,8 @@ public class RedisMemory implements Memory {
         this.key = key;
         this.ttlSeconds = ttlSeconds;
         this.maxMessages = maxMessages;
+        this.compressionTokenThreshold = compressionTokenThreshold;
+        this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
     }
 
     /**
@@ -81,10 +103,36 @@ public class RedisMemory implements Memory {
      * @param maxMessages maximum number of messages to retain
      */
     public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds, int maxMessages) {
+        this(jedisPool, key, ttlSeconds, maxMessages, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+    }
+
+    /**
+     * Create Redis memory with existing JedisPool and compression threshold.
+     *
+     * @param jedisPool                  existing JedisPool
+     * @param key                        Redis key for storing messages
+     * @param ttlSeconds                 TTL in seconds (0 for no expiration)
+     * @param maxMessages                maximum number of messages to retain
+     * @param compressionTokenThreshold  token threshold to trigger compression
+     */
+    public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds, int maxMessages,
+                       long compressionTokenThreshold) {
         this.jedisPool = jedisPool;
         this.key = key;
         this.ttlSeconds = ttlSeconds;
         this.maxMessages = maxMessages;
+        this.compressionTokenThreshold = compressionTokenThreshold;
+        this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
+    }
+
+    @Override
+    public void setCompressionLLMClient(LLMClient llmClient) {
+        this.compressionLLMClient = llmClient;
+    }
+
+    @Override
+    public void setCompressionPrompt(String prompt) {
+        this.compressionPrompt = prompt != null ? prompt : DEFAULT_COMPRESSION_PROMPT;
     }
 
     @Override
@@ -99,11 +147,15 @@ public class RedisMemory implements Memory {
             }
 
             // Trim list if max messages exceeded
-            if (maxMessages < Integer.MAX_VALUE) {
+            if (maxMessages < 30) {
                 jedis.ltrim(key, -maxMessages, -1);
             }
 
             log.debug("Added message to Redis key '{}', current size: {}", key, size());
+
+            // Auto compress if needed
+            autoCompressIfNeeded();
+
         } catch (JsonProcessingException e) {
             log.error("Failed to serialize message: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to serialize message", e);
@@ -142,6 +194,120 @@ public class RedisMemory implements Memory {
         try (Jedis jedis = jedisPool.getResource()) {
             return Math.toIntExact(jedis.llen(key));
         }
+    }
+
+    @Override
+    public long estimateTokens() {
+        List<Message> messages = getMessages();
+        long total = 0;
+        for (Message msg : messages) {
+            total += estimateMessageTokens(msg);
+        }
+        return total;
+    }
+
+    @Override
+    public boolean compress() {
+        if (compressionLLMClient == null) {
+            log.warn("Compression LLM client not set, cannot compress");
+            return false;
+        }
+
+        List<Message> messages = getMessages();
+        if (messages.isEmpty()) {
+            return false;
+        }
+
+        // Separate system messages and conversation messages
+        List<Message> systemMessages = new ArrayList<>();
+        List<Message> conversationMessages = new ArrayList<>();
+
+        for (Message msg : messages) {
+            if (msg.role() == Role.SYSTEM) {
+                systemMessages.add(msg);
+            } else {
+                conversationMessages.add(msg);
+            }
+        }
+
+        if (conversationMessages.isEmpty()) {
+            return false;
+        }
+
+        // Build conversation text for compression
+        StringBuilder conversationText = new StringBuilder();
+        for (Message msg : conversationMessages) {
+            String roleStr = msg.role().getValue();
+            String content = msg.content() != null ? msg.content() : "";
+            conversationText.append(roleStr).append(": ").append(content).append("\n");
+        }
+
+        // Call LLM to compress
+        String prompt = compressionPrompt.replace("{conversation}", conversationText.toString());
+        List<Message> compressMessages = new ArrayList<>();
+        compressMessages.add(Message.system("You are a helpful assistant that compresses conversations."));
+        compressMessages.add(Message.user(prompt));
+
+        try {
+            var response = compressionLLMClient.chat(compressMessages);
+            String summary = response.content();
+
+            if (summary != null && !summary.isBlank()) {
+                // Clear and rebuild with compressed summary
+                clear();
+                try (Jedis jedis = jedisPool.getResource()) {
+                    // Re-add system messages
+                    for (Message sysMsg : systemMessages) {
+                        String json = objectMapper.writeValueAsString(sysMsg);
+                        jedis.rpush(key, json);
+                    }
+                    // Add compressed summary
+                    Message summaryMsg = Message.system("[对话摘要]\n" + summary);
+                    String json = objectMapper.writeValueAsString(summaryMsg);
+                    jedis.rpush(key, json);
+
+                    // Set TTL if configured
+                    if (ttlSeconds > 0) {
+                        jedis.expire(key, ttlSeconds);
+                    }
+                }
+                log.info("Successfully compressed conversation in Redis");
+                return true;
+            }
+        } catch (Exception e) {
+            log.error("Failed to compress conversation: {}", e.getMessage(), e);
+        }
+
+        return false;
+    }
+
+    private void autoCompressIfNeeded() {
+        if (compressionLLMClient == null || compressionTokenThreshold <= 0) {
+            return;
+        }
+
+        long currentTokens = estimateTokens();
+        if (currentTokens >= compressionTokenThreshold) {
+            log.info("Token count {} exceeds threshold {}, triggering compression",
+                    currentTokens, compressionTokenThreshold);
+            compress();
+        }
+    }
+
+    private long estimateMessageTokens(Message message) {
+        String content = message.content();
+        if (content == null || content.isEmpty()) {
+            return 0;
+        }
+
+        // Count Chinese characters
+        long chineseChars = content.chars()
+                .filter(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN)
+                .count();
+        long otherChars = content.length() - chineseChars;
+
+        // Chinese: ~1.5 tokens per char, English: ~0.25 tokens per char
+        return (long) (chineseChars * 1.5 + otherChars * 0.25);
     }
 
     /**

@@ -3,6 +3,7 @@ package com.agent.core.agent.plan;
 import com.agent.core.agent.AgentResult;
 import com.agent.core.agent.BaseAgent;
 import com.agent.core.llm.LLMClient;
+import com.agent.core.llm.LLMParams;
 import com.agent.core.memory.InMemoryStore;
 import com.agent.core.memory.Memory;
 import com.agent.core.model.*;
@@ -19,7 +20,7 @@ import java.util.List;
  * 2. Execution Phase: Each step is executed sequentially, with the LLM using tools as needed
  * 3. Replanning Phase (optional): After executing steps, the agent can revise the plan if needed
  *
- * This approach is well-suited for complex, multi-step tasks where upfront planning is beneficial.
+ * Thread-safe: Each run() invocation creates its own execution context.
  */
 public class PlanAndExecuteAgent extends BaseAgent {
 
@@ -71,12 +72,17 @@ public class PlanAndExecuteAgent extends BaseAgent {
     private final boolean enableReplanning;
 
     public PlanAndExecuteAgent(LLMClient llmClient, ToolRegistry toolRegistry, int maxSteps) {
-        this(llmClient, toolRegistry, new InMemoryStore(), maxSteps, true);
+        this(llmClient, toolRegistry, maxSteps, true, LLMParams.DEFAULT);
     }
 
-    public PlanAndExecuteAgent(LLMClient llmClient, ToolRegistry toolRegistry,
-                               Memory memory, int maxSteps, boolean enableReplanning) {
-        super(llmClient, toolRegistry, memory, null);
+    public PlanAndExecuteAgent(LLMClient llmClient, ToolRegistry toolRegistry, int maxSteps,
+                               boolean enableReplanning) {
+        this(llmClient, toolRegistry, maxSteps, enableReplanning, LLMParams.DEFAULT);
+    }
+
+    public PlanAndExecuteAgent(LLMClient llmClient, ToolRegistry toolRegistry, int maxSteps,
+                               boolean enableReplanning, LLMParams llmParams) {
+        super(llmClient, toolRegistry, null, llmParams);
         this.maxSteps = maxSteps;
         this.enableReplanning = enableReplanning;
     }
@@ -84,7 +90,18 @@ public class PlanAndExecuteAgent extends BaseAgent {
     @Override
     public AgentResult run(String userInput) {
         log.info("PlanAndExecuteAgent started with task: {}", userInput);
+        return executeTask(userInput);
+    }
 
+    @Override
+    public AgentResult run(String userInput, String sessionId) {
+        log.info("PlanAndExecuteAgent started with task: {} (session: {})", userInput, sessionId);
+        // Note: Plan-and-Execute creates fresh contexts for each phase (planning/execution),
+        // so the session is logged but not used for context reuse.
+        return executeTask(userInput);
+    }
+
+    private AgentResult executeTask(String userInput) {
         int totalTokens = 0;
         int totalSteps = 0;
 
@@ -113,7 +130,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
         for (int i = 0; i < steps.size() && totalSteps < maxSteps; i++) {
             totalSteps++;
             String currentStep = steps.get(i);
-//            log.info("=== Executing Step {}/{}: {} ===", i + 1, steps.size(), currentStep);
+            log.info("=== Executing Step {}/{}: {} ===", i + 1, steps.size(), currentStep);
 
             if (observer != null) {
                 observer.onStepStart(totalSteps, "execute");
@@ -123,7 +140,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
             totalTokens += result.tokensUsed();
             completedResults.add(result.summary());
 
-//            log.info("Step {} completed: {}", i + 1, truncate(result.summary(), 200));
+            log.info("Step {} completed: {}", i + 1, truncate(result.summary(), 200));
 
             if (observer != null) {
                 observer.onStepEnd(totalSteps, "execute");
@@ -141,7 +158,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
                 totalTokens += replanResult.tokensUsed();
 
                 if (replanResult.isComplete()) {
-//                    log.info("Replanner determined task is complete");
+                    log.info("Replanner determined task is complete");
                     if (observer != null) {
                         observer.onStepEnd(totalSteps, "replan");
                     }
@@ -152,7 +169,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
                     // Replace remaining steps with new plan
                     steps = replanResult.steps();
                     i = -1; // Reset to start of new plan (will be incremented to 0)
-//                    log.info("Plan revised, {} remaining steps", steps.size());
+                    log.info("Plan revised, {} remaining steps", steps.size());
                 }
 
                 if (observer != null) {
@@ -173,7 +190,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
         planMemory.add(Message.system(PLANNER_SYSTEM_PROMPT));
         planMemory.add(Message.user("Create a plan for the following task:\n\n" + task));
 
-        LLMResponse response = llmClient.chat(planMemory.getMessages());
+        LLMResponse response = llmClient.chat(planMemory.getMessages(), List.of(), llmParams);
         String planText = response.content();
         List<String> steps = parsePlan(planText);
 
@@ -198,7 +215,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
 
         while (iterations < maxIterations) {
             iterations++;
-            LLMResponse response = llmClient.chat(execMemory.getMessages(), toolRegistry.getDefinitions());
+            LLMResponse response = llmClient.chat(execMemory.getMessages(), toolRegistry.getDefinitions(), llmParams);
             tokensUsed += response.totalTokens();
 
             Message assistantMessage = response.message();
@@ -241,7 +258,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
         replanMemory.add(Message.system(REPLANNER_SYSTEM_PROMPT));
         replanMemory.add(Message.user(context.toString()));
 
-        LLMResponse response = llmClient.chat(replanMemory.getMessages());
+        LLMResponse response = llmClient.chat(replanMemory.getMessages(), List.of(), llmParams);
         String replanText = response.content();
 
         if (replanText != null && replanText.trim().equalsIgnoreCase("COMPLETE")) {

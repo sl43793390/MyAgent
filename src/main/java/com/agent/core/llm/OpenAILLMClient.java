@@ -93,6 +93,11 @@ public class OpenAILLMClient implements LLMClient {
 
     @Override
     public LLMResponse chat(List<Message> messages, List<ToolDefinition> tools) {
+        return chat(messages, tools, LLMParams.DEFAULT);
+    }
+
+    @Override
+    public LLMResponse chat(List<Message> messages, List<ToolDefinition> tools, LLMParams params) {
         long startTime = System.currentTimeMillis();
 
         try {
@@ -102,9 +107,45 @@ public class OpenAILLMClient implements LLMClient {
             }
 
             ChatCompletionCreateParams.Builder paramsBuilder = ChatCompletionCreateParams.builder()
-                    .model(model)
-                    .temperature(0.7)
-                    .maxCompletionTokens(4096);
+                    .model(model);
+
+            // Apply custom parameters
+            if (params != null) {
+                if (params.temperature() != null) {
+                    paramsBuilder.temperature(params.temperature());
+                } else {
+                    paramsBuilder.temperature(0.7);
+                }
+
+                if (params.topP() != null) {
+                    paramsBuilder.topP(params.topP());
+                }
+
+                if (params.maxCompletionTokens() != null) {
+                    paramsBuilder.maxCompletionTokens(params.maxCompletionTokens());
+                } else {
+                    paramsBuilder.maxCompletionTokens(4096);
+                }
+
+                if (params.frequencyPenalty() != null) {
+                    paramsBuilder.frequencyPenalty(params.frequencyPenalty());
+                }
+
+                if (params.presencePenalty() != null) {
+                    paramsBuilder.presencePenalty(params.presencePenalty());
+                }
+
+                if (params.seed() != null) {
+                    paramsBuilder.seed(params.seed());
+                }
+
+                if (params.stop() != null && !params.stop().isEmpty()) {
+                    paramsBuilder.stop(params.stop());
+                }
+            } else {
+                paramsBuilder.temperature(0.7);
+                paramsBuilder.maxCompletionTokens(4096);
+            }
 
             // Add messages
             for (Message message : messages) {
@@ -118,12 +159,12 @@ public class OpenAILLMClient implements LLMClient {
                 }
             }
 
-            ChatCompletionCreateParams params = paramsBuilder.build();
+            ChatCompletionCreateParams createParams = paramsBuilder.build();
 
             log.debug("Sending request to OpenAI with {} messages and {} tools",
                     messages.size(), tools != null ? tools.size() : 0);
 
-            ChatCompletion completion = client.chat().completions().create(params);
+            ChatCompletion completion = client.chat().completions().create(createParams);
 
             log.debug("Received response from OpenAI");
 
