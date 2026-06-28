@@ -32,7 +32,8 @@ public class WebFetchTool implements Tool {
 
     @Override
     public String execute(Map<String, Object> arguments) {
-        String urlStr = (String) arguments.get("url");
+        Object urlObj = arguments.get("url");
+        String urlStr = urlObj != null ? urlObj.toString() : null;
         if (urlStr == null || urlStr.isBlank()) {
             return "Error: 'url' parameter is required";
         }
