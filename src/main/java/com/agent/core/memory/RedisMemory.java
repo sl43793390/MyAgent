@@ -19,7 +19,7 @@ import java.util.List;
  * Redis-based implementation of conversation memory.
  * Stores messages in a Redis list with optional TTL.
  */
-public class RedisMemory implements Memory {
+public class RedisMemory implements Memory, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(RedisMemory.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -27,10 +27,12 @@ public class RedisMemory implements Memory {
     private final JedisPool jedisPool;
     private final String key;
     private final int ttlSeconds;
-    private final int maxMessages;
     private final long compressionTokenThreshold;
     private LLMClient compressionLLMClient;
     private String compressionPrompt;
+
+    // 增量维护的 token 估算值。-1 表示尚未从 Redis 加载（懒初始化，支持应用重启后恢复）
+    private long currentTokens = -1L;
 
     /**
      * Create Redis memory with default settings.
@@ -40,7 +42,7 @@ public class RedisMemory implements Memory {
      * @param key  Redis key for storing messages
      */
     public RedisMemory(String host, int port, String key) {
-        this(host, port, key, 0, 30, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+        this(host, port, key, 0, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
@@ -52,33 +54,19 @@ public class RedisMemory implements Memory {
      * @param ttlSeconds TTL in seconds (0 for no expiration)
      */
     public RedisMemory(String host, int port, String key, int ttlSeconds) {
-        this(host, port, key, ttlSeconds, 30, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+        this(host, port, key, ttlSeconds, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
-     * Create Redis memory with TTL and max messages.
+     * Create Redis memory with TTL and compression threshold.
      *
-     * @param host        Redis host
-     * @param port        Redis port
-     * @param key         Redis key for storing messages
-     * @param ttlSeconds  TTL in seconds (0 for no expiration)
-     * @param maxMessages maximum number of messages to retain
+     * @param host                      Redis host
+     * @param port                      Redis port
+     * @param key                       Redis key for storing messages
+     * @param ttlSeconds                TTL in seconds (0 for no expiration)
+     * @param compressionTokenThreshold token threshold to trigger compression
      */
-    public RedisMemory(String host, int port, String key, int ttlSeconds, int maxMessages) {
-        this(host, port, key, ttlSeconds, maxMessages, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
-    }
-
-    /**
-     * Create Redis memory with all parameters.
-     *
-     * @param host                       Redis host
-     * @param port                       Redis port
-     * @param key                        Redis key for storing messages
-     * @param ttlSeconds                 TTL in seconds (0 for no expiration)
-     * @param maxMessages                maximum number of messages to retain
-     * @param compressionTokenThreshold  token threshold to trigger compression
-     */
-    public RedisMemory(String host, int port, String key, int ttlSeconds, int maxMessages,
+    public RedisMemory(String host, int port, String key, int ttlSeconds,
                        long compressionTokenThreshold) {
         JedisPoolConfig config = new JedisPoolConfig();
         config.setMaxTotal(10);
@@ -89,7 +77,6 @@ public class RedisMemory implements Memory {
         this.jedisPool = new JedisPool(config, host, port);
         this.key = key;
         this.ttlSeconds = ttlSeconds;
-        this.maxMessages = maxMessages;
         this.compressionTokenThreshold = compressionTokenThreshold;
         this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
     }
@@ -97,30 +84,27 @@ public class RedisMemory implements Memory {
     /**
      * Create Redis memory with existing JedisPool.
      *
-     * @param jedisPool   existing JedisPool
-     * @param key         Redis key for storing messages
-     * @param ttlSeconds  TTL in seconds (0 for no expiration)
-     * @param maxMessages maximum number of messages to retain
+     * @param jedisPool  existing JedisPool
+     * @param key        Redis key for storing messages
+     * @param ttlSeconds TTL in seconds (0 for no expiration)
      */
-    public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds, int maxMessages) {
-        this(jedisPool, key, ttlSeconds, maxMessages, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+    public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds) {
+        this(jedisPool, key, ttlSeconds, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
      * Create Redis memory with existing JedisPool and compression threshold.
      *
-     * @param jedisPool                  existing JedisPool
-     * @param key                        Redis key for storing messages
-     * @param ttlSeconds                 TTL in seconds (0 for no expiration)
-     * @param maxMessages                maximum number of messages to retain
-     * @param compressionTokenThreshold  token threshold to trigger compression
+     * @param jedisPool                 existing JedisPool
+     * @param key                       Redis key for storing messages
+     * @param ttlSeconds                TTL in seconds (0 for no expiration)
+     * @param compressionTokenThreshold token threshold to trigger compression
      */
-    public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds, int maxMessages,
+    public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds,
                        long compressionTokenThreshold) {
         this.jedisPool = jedisPool;
         this.key = key;
         this.ttlSeconds = ttlSeconds;
-        this.maxMessages = maxMessages;
         this.compressionTokenThreshold = compressionTokenThreshold;
         this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
     }
@@ -146,12 +130,11 @@ public class RedisMemory implements Memory {
                 jedis.expire(key, ttlSeconds);
             }
 
-            // Trim list if max messages exceeded
-            if (maxMessages < 30) {
-                jedis.ltrim(key, -maxMessages, -1);
-            }
+            // 增量更新 token 缓存（避免每次 add 都全量拉取消息计算）
+            ensureTokensInitialized();
+            currentTokens += estimateMessageTokens(message);
 
-            log.debug("Added message to Redis key '{}', current size: {}", key, size());
+            log.debug("Added message to Redis key '{}'", key);
 
             // Auto compress if needed
             autoCompressIfNeeded();
@@ -185,6 +168,7 @@ public class RedisMemory implements Memory {
     public void clear() {
         try (Jedis jedis = jedisPool.getResource()) {
             jedis.del(key);
+            currentTokens = 0L;
             log.debug("Cleared Redis key '{}'", key);
         }
     }
@@ -198,12 +182,8 @@ public class RedisMemory implements Memory {
 
     @Override
     public long estimateTokens() {
-        List<Message> messages = getMessages();
-        long total = 0;
-        for (Message msg : messages) {
-            total += estimateMessageTokens(msg);
-        }
-        return total;
+        ensureTokensInitialized();
+        return currentTokens;
     }
 
     @Override
@@ -271,6 +251,8 @@ public class RedisMemory implements Memory {
                         jedis.expire(key, ttlSeconds);
                     }
                 }
+                // 压缩后消息列表已重建，重置缓存以触发下次懒加载
+                currentTokens = -1L;
                 log.info("Successfully compressed conversation in Redis");
                 return true;
             }
@@ -286,12 +268,27 @@ public class RedisMemory implements Memory {
             return;
         }
 
-        long currentTokens = estimateTokens();
+        ensureTokensInitialized();
         if (currentTokens >= compressionTokenThreshold) {
             log.info("Token count {} exceeds threshold {}, triggering compression",
                     currentTokens, compressionTokenThreshold);
             compress();
         }
+    }
+
+    /**
+     * 懒初始化 token 缓存。仅在首次访问时从 Redis 全量加载，之后增量维护。
+     * 支持应用重启后从持久化存储恢复 token 计数。
+     */
+    private void ensureTokensInitialized() {
+        if (currentTokens >= 0) {
+            return;
+        }
+        long total = 0;
+        for (Message msg : getMessages()) {
+            total += estimateMessageTokens(msg);
+        }
+        currentTokens = total;
     }
 
     private long estimateMessageTokens(Message message) {

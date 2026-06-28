@@ -87,6 +87,7 @@ public class ReactAgent extends BaseAgent {
                 observer.onStepStart(step, "react");
             }
 
+            // Call LLM
             LLMResponse response = callLLM(context);
             totalTokens += response.totalTokens();
 
@@ -95,10 +96,10 @@ public class ReactAgent extends BaseAgent {
 
             // Check if the LLM wants to use tools
             if (response.hasToolCalls()) {
-//                log.info("LLM requested {} tool call(s)", response.toolCalls().size());
+                log.info("LLM requested {} tool call(s)", response.toolCalls().size());
 
                 for (ToolCall toolCall : response.toolCalls()) {
-//                    log.info("Calling tool: {} with args: {}", toolCall.name(), toolCall.arguments());
+                    log.info("Calling tool: {} with args: {}", toolCall.name(), toolCall.arguments());
 
                     // Execute tool
                     String toolResult;
@@ -108,7 +109,7 @@ public class ReactAgent extends BaseAgent {
                         toolResult = "Error: Tool '" + toolCall.name() + "' not found";
                     }
 
-//                    log.info("Tool result: {}", truncate(toolResult, 200));
+                    log.info("Tool result: {}", truncate(toolResult, 200));
 
                     // Add tool result to context
                     context.add(Message.tool(toolResult, toolCall.id(), toolCall.name()));
@@ -120,7 +121,7 @@ public class ReactAgent extends BaseAgent {
                 }
 
                 // No tool calls - this is the final answer
-//                log.info("ReactAgent completed in {} steps", step);
+                log.info("ReactAgent completed in {} steps", step);
                 String output = response.content();
                 return new AgentResult(output, step, totalTokens);
             }

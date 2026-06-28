@@ -19,7 +19,7 @@ import java.util.List;
  * MySQL-based implementation of conversation memory.
  * Stores messages in a MySQL database table.
  */
-public class MySQLMemory implements Memory {
+public class MySQLMemory implements Memory, AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(MySQLMemory.class);
     private static final ObjectMapper objectMapper = new ObjectMapper();
@@ -27,10 +27,12 @@ public class MySQLMemory implements Memory {
     private final HikariDataSource dataSource;
     private final String tableName;
     private final String sessionId;
-    private final int maxMessages;
     private final long compressionTokenThreshold;
     private LLMClient compressionLLMClient;
     private String compressionPrompt;
+
+    // 增量维护的 token 估算值。-1 表示尚未从 MySQL 加载（懒初始化，支持应用重启后恢复）
+    private long currentTokens = -1L;
 
     /**
      * Create MySQL memory with connection details.
@@ -43,38 +45,21 @@ public class MySQLMemory implements Memory {
      */
     public MySQLMemory(String jdbcUrl, String username, String password,
                        String tableName, String sessionId) {
-        this(jdbcUrl, username, password, tableName, sessionId, 30, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+        this(jdbcUrl, username, password, tableName, sessionId, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
-     * Create MySQL memory with connection details and max messages.
+     * Create MySQL memory with connection details and compression threshold.
      *
-     * @param jdbcUrl     JDBC URL
-     * @param username    database username
-     * @param password    database password
-     * @param tableName   table name for storing messages
-     * @param sessionId   session ID for this conversation
-     * @param maxMessages maximum number of messages to retain
+     * @param jdbcUrl                   JDBC URL
+     * @param username                  database username
+     * @param password                  database password
+     * @param tableName                 table name for storing messages
+     * @param sessionId                 session ID for this conversation
+     * @param compressionTokenThreshold token threshold to trigger compression
      */
     public MySQLMemory(String jdbcUrl, String username, String password,
-                       String tableName, String sessionId, int maxMessages) {
-        this(jdbcUrl, username, password, tableName, sessionId, maxMessages, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
-    }
-
-    /**
-     * Create MySQL memory with connection details, max messages and compression threshold.
-     *
-     * @param jdbcUrl                    JDBC URL
-     * @param username                   database username
-     * @param password                   database password
-     * @param tableName                  table name for storing messages
-     * @param sessionId                  session ID for this conversation
-     * @param maxMessages                maximum number of messages to retain
-     * @param compressionTokenThreshold  token threshold to trigger compression
-     */
-    public MySQLMemory(String jdbcUrl, String username, String password,
-                       String tableName, String sessionId, int maxMessages,
-                       long compressionTokenThreshold) {
+                       String tableName, String sessionId, long compressionTokenThreshold) {
         HikariConfig config = new HikariConfig();
         config.setJdbcUrl(jdbcUrl);
         config.setUsername(username);
@@ -88,7 +73,6 @@ public class MySQLMemory implements Memory {
         this.dataSource = new HikariDataSource(config);
         this.tableName = tableName;
         this.sessionId = sessionId;
-        this.maxMessages = maxMessages;
         this.compressionTokenThreshold = compressionTokenThreshold;
         this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
 
@@ -99,31 +83,27 @@ public class MySQLMemory implements Memory {
     /**
      * Create MySQL memory with existing HikariDataSource.
      *
-     * @param dataSource  existing HikariDataSource
-     * @param tableName   table name for storing messages
-     * @param sessionId   session ID for this conversation
-     * @param maxMessages maximum number of messages to retain
+     * @param dataSource existing HikariDataSource
+     * @param tableName  table name for storing messages
+     * @param sessionId  session ID for this conversation
      */
-    public MySQLMemory(HikariDataSource dataSource, String tableName,
-                       String sessionId, int maxMessages) {
-        this(dataSource, tableName, sessionId, maxMessages, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+    public MySQLMemory(HikariDataSource dataSource, String tableName, String sessionId) {
+        this(dataSource, tableName, sessionId, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
-     * Create MySQL memory with existing HikariDataSource, max messages and compression threshold.
+     * Create MySQL memory with existing HikariDataSource and compression threshold.
      *
-     * @param dataSource                 existing HikariDataSource
-     * @param tableName                  table name for storing messages
-     * @param sessionId                  session ID for this conversation
-     * @param maxMessages                maximum number of messages to retain
-     * @param compressionTokenThreshold  token threshold to trigger compression
+     * @param dataSource                existing HikariDataSource
+     * @param tableName                 table name for storing messages
+     * @param sessionId                 session ID for this conversation
+     * @param compressionTokenThreshold token threshold to trigger compression
      */
     public MySQLMemory(HikariDataSource dataSource, String tableName,
-                       String sessionId, int maxMessages, long compressionTokenThreshold) {
+                       String sessionId, long compressionTokenThreshold) {
         this.dataSource = dataSource;
         this.tableName = tableName;
         this.sessionId = sessionId;
-        this.maxMessages = maxMessages;
         this.compressionTokenThreshold = compressionTokenThreshold;
         this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
 
@@ -191,10 +171,9 @@ public class MySQLMemory implements Memory {
             pstmt.executeUpdate();
             log.debug("Added message to MySQL table '{}' for session '{}'", tableName, sessionId);
 
-            // Trim old messages if max exceeded
-            if (maxMessages < 30) {
-                trimOldMessages(conn);
-            }
+            // 增量更新 token 缓存（避免每次 add 都全量查询数据库计算）
+            ensureTokensInitialized();
+            currentTokens += estimateMessageTokens(message);
 
             // Auto compress if needed
             autoCompressIfNeeded();
@@ -202,28 +181,6 @@ public class MySQLMemory implements Memory {
         } catch (SQLException | JsonProcessingException e) {
             log.error("Failed to add message: {}", e.getMessage(), e);
             throw new RuntimeException("Failed to add message", e);
-        }
-    }
-
-    private void trimOldMessages(Connection conn) throws SQLException {
-        String trimSQL = """
-                DELETE FROM %s
-                WHERE session_id = ?
-                AND id NOT IN (
-                    SELECT id FROM (
-                        SELECT id FROM %s
-                        WHERE session_id = ?
-                        ORDER BY created_at DESC
-                        LIMIT ?
-                    ) AS temp
-                )
-                """.formatted(tableName, tableName);
-
-        try (PreparedStatement pstmt = conn.prepareStatement(trimSQL)) {
-            pstmt.setString(1, sessionId);
-            pstmt.setString(2, sessionId);
-            pstmt.setInt(3, maxMessages);
-            pstmt.executeUpdate();
         }
     }
 
@@ -281,6 +238,7 @@ public class MySQLMemory implements Memory {
 
             pstmt.setString(1, sessionId);
             int deleted = pstmt.executeUpdate();
+            currentTokens = 0L;
             log.debug("Cleared {} messages from MySQL table '{}' for session '{}'",
                     deleted, tableName, sessionId);
 
@@ -315,12 +273,8 @@ public class MySQLMemory implements Memory {
 
     @Override
     public long estimateTokens() {
-        List<Message> messages = getMessages();
-        long total = 0;
-        for (Message msg : messages) {
-            total += estimateMessageTokens(msg);
-        }
-        return total;
+        ensureTokensInitialized();
+        return currentTokens;
     }
 
     @Override
@@ -403,6 +357,8 @@ public class MySQLMemory implements Memory {
                         pstmt.executeUpdate();
                     }
                 }
+                // 压缩后消息列表已重建，重置缓存以触发下次懒加载
+                currentTokens = -1L;
                 log.info("Successfully compressed conversation in MySQL");
                 return true;
             }
@@ -418,12 +374,27 @@ public class MySQLMemory implements Memory {
             return;
         }
 
-        long currentTokens = estimateTokens();
+        ensureTokensInitialized();
         if (currentTokens >= compressionTokenThreshold) {
             log.info("Token count {} exceeds threshold {}, triggering compression",
                     currentTokens, compressionTokenThreshold);
             compress();
         }
+    }
+
+    /**
+     * 懒初始化 token 缓存。仅在首次访问时从 MySQL 全量加载，之后增量维护。
+     * 支持应用重启后从持久化存储恢复 token 计数。
+     */
+    private void ensureTokensInitialized() {
+        if (currentTokens >= 0) {
+            return;
+        }
+        long total = 0;
+        for (Message msg : getMessages()) {
+            total += estimateMessageTokens(msg);
+        }
+        currentTokens = total;
     }
 
     private long estimateMessageTokens(Message message) {

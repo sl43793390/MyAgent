@@ -18,35 +18,26 @@ public class InMemoryStore implements Memory {
     private static final Logger log = LoggerFactory.getLogger(InMemoryStore.class);
 
     private final List<Message> messages = new ArrayList<>();
-    private final int maxMessages;
     private final long compressionTokenThreshold;
     private LLMClient compressionLLMClient;
     private String compressionPrompt;
 
+    // 增量维护的 token 估算值，避免每次 add() 都全量遍历消息列表
+    private long currentTokens = 0L;
+
     /**
-     * Create memory with unlimited capacity.
+     * Create memory with default compression threshold.
      */
     public InMemoryStore() {
-        this(30, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
+        this(DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
-     * Create memory with a maximum number of messages to retain.
+     * Create memory with a custom compression threshold.
      *
-     * @param maxMessages maximum number of messages to retain
+     * @param compressionTokenThreshold token threshold to trigger compression
      */
-    public InMemoryStore(int maxMessages) {
-        this(maxMessages, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
-    }
-
-    /**
-     * Create memory with max messages and compression threshold.
-     *
-     * @param maxMessages                  maximum number of messages to retain
-     * @param compressionTokenThreshold    token threshold to trigger compression
-     */
-    public InMemoryStore(int maxMessages, long compressionTokenThreshold) {
-        this.maxMessages = maxMessages;
+    public InMemoryStore(long compressionTokenThreshold) {
         this.compressionTokenThreshold = compressionTokenThreshold;
         this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
     }
@@ -70,7 +61,7 @@ public class InMemoryStore implements Memory {
     @Override
     public synchronized void add(Message message) {
         messages.add(message);
-        trimIfNeeded();
+        currentTokens += estimateMessageTokens(message);
         autoCompressIfNeeded();
     }
 
@@ -82,6 +73,7 @@ public class InMemoryStore implements Memory {
     @Override
     public synchronized void clear() {
         messages.clear();
+        currentTokens = 0L;
     }
 
     @Override
@@ -91,11 +83,7 @@ public class InMemoryStore implements Memory {
 
     @Override
     public synchronized long estimateTokens() {
-        long total = 0;
-        for (Message msg : messages) {
-            total += estimateMessageTokens(msg);
-        }
-        return total;
+        return currentTokens;
     }
 
     @Override
@@ -139,10 +127,20 @@ public class InMemoryStore implements Memory {
             String summary = response.content();
 
             if (summary != null && !summary.isBlank()) {
+                // 计算被压缩掉的对话消息 token，用于更新缓存
+                long removedTokens = 0L;
+                for (Message msg : conversationMessages) {
+                    removedTokens += estimateMessageTokens(msg);
+                }
+
                 // Replace all conversation messages with a single summary
                 messages.clear();
                 messages.addAll(systemMessages);
-                messages.add(Message.system("[对话摘要]\n" + summary));
+                Message summaryMsg = Message.system("[对话摘要]\n" + summary);
+                messages.add(summaryMsg);
+
+                // 重新校准 token 缓存：减去被移除的，加上摘要消息的
+                currentTokens = currentTokens - removedTokens + estimateMessageTokens(summaryMsg);
                 return true;
             }
         } catch (Exception e) {
@@ -153,40 +151,12 @@ public class InMemoryStore implements Memory {
         return false;
     }
 
-    private void trimIfNeeded() {
-        if (messages.size() <= maxMessages) {
-            return;
-        }
-
-        // Keep system messages and trim non-system messages from the beginning
-        List<Message> systemMessages = new ArrayList<>();
-        List<Message> nonSystemMessages = new ArrayList<>();
-
-        for (Message msg : messages) {
-            if (msg.role() == Role.SYSTEM) {
-                systemMessages.add(msg);
-            } else {
-                nonSystemMessages.add(msg);
-            }
-        }
-
-        // Remove oldest non-system messages
-        int excess = nonSystemMessages.size() - (maxMessages - systemMessages.size());
-        if (excess > 0) {
-            nonSystemMessages = nonSystemMessages.subList(excess, nonSystemMessages.size());
-        }
-
-        messages.clear();
-        messages.addAll(systemMessages);
-        messages.addAll(nonSystemMessages);
-    }
-
     private void autoCompressIfNeeded() {
         if (compressionLLMClient == null || compressionTokenThreshold <= 0) {
             return;
         }
 
-        long currentTokens = estimateTokens();
+        // 直接读取增量维护的 token 缓存，避免每次 add 都全量遍历
         if (currentTokens >= compressionTokenThreshold) {
             compress();
         }

@@ -38,7 +38,8 @@ public class CalculatorTool implements Tool {
 
     @Override
     public String execute(Map<String, Object> arguments) {
-        String expression = (String) arguments.get("expression");
+        Object exprObj = arguments.get("expression");
+        String expression = exprObj != null ? exprObj.toString() : null;
         if (expression == null || expression.isBlank()) {
             return "Error: 'expression' parameter is required";
         }

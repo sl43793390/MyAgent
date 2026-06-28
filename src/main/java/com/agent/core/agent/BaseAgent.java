@@ -4,6 +4,7 @@ import com.agent.core.llm.LLMClient;
 import com.agent.core.llm.LLMParams;
 import com.agent.core.memory.InMemoryStore;
 import com.agent.core.memory.Memory;
+import com.agent.core.memory.MemoryFactory;
 import com.agent.core.model.LLMResponse;
 import com.agent.core.model.Message;
 import com.agent.core.observer.AgentObserver;
@@ -36,6 +37,10 @@ public abstract class BaseAgent {
     protected final SessionManager sessionManager;
     protected AgentObserver observer;
 
+    // Memory factory: controls which Memory implementation is used for new contexts and sessions.
+    // Default uses InMemoryStore. Use setMemoryFactory() to switch to Redis, MySQL, etc.
+    protected MemoryFactory memoryFactory = sessionId -> new InMemoryStore();
+
     protected BaseAgent(LLMClient llmClient, ToolRegistry toolRegistry, String systemPrompt) {
         this(llmClient, toolRegistry, systemPrompt, LLMParams.DEFAULT);
     }
@@ -45,7 +50,7 @@ public abstract class BaseAgent {
         this.toolRegistry = toolRegistry;
         this.systemPrompt = systemPrompt;
         this.llmParams = llmParams != null ? llmParams : LLMParams.DEFAULT;
-        this.sessionManager = new SessionManager();
+        this.sessionManager = new SessionManager(memoryFactory);
     }
 
     /**
@@ -64,6 +69,30 @@ public abstract class BaseAgent {
      */
     public AgentObserver getObserver() {
         return observer;
+    }
+
+    /**
+     * Set the memory factory to control which Memory implementation is used.
+     * This affects both stateless mode ({@link #createContext()}) and session mode
+     * ({@link #getSessionContext}). Existing sessions are not affected; only new
+     * contexts/sessions will use the new factory.
+     *
+     * <p>Usage:
+     * <pre>{@code
+     * // Switch to Redis
+     * agent.setMemoryFactory(sessionId ->
+     *     new RedisMemory("localhost", 6379, "session:" + sessionId, 3600));
+     *
+     * // Switch to MySQL
+     * agent.setMemoryFactory(sessionId ->
+     *     new MySQLMemory(jdbcUrl, user, pass, "messages", sessionId));
+     * }</pre>
+     *
+     * @param memoryFactory the factory to create Memory instances, or null to reset to default
+     */
+    public void setMemoryFactory(MemoryFactory memoryFactory) {
+        this.memoryFactory = memoryFactory != null ? memoryFactory : sessionId -> new InMemoryStore();
+        this.sessionManager.setMemoryFactory(this.memoryFactory);
     }
 
     /**
@@ -91,7 +120,7 @@ public abstract class BaseAgent {
      * @return a new Memory instance initialized with the system prompt
      */
     protected Memory createContext() {
-        Memory context = new InMemoryStore();
+        Memory context = memoryFactory.create(null);
         if (systemPrompt != null && !systemPrompt.isBlank()) {
             context.add(Message.system(systemPrompt));
         }

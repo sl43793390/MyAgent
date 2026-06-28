@@ -44,11 +44,11 @@ public class LoggingObserver implements AgentObserver {
         if (verbose) {
             for (int i = 0; i < messages.size(); i++) {
                 Message msg = messages.get(i);
-                log.info("[LLM] Message[{}]: role={}, content={}",
+                log.debug("[LLM] Message[{}]: role={}, content={}",
                         i, msg.role(), truncate(msg.content(), 500));
             }
             if (!tools.isEmpty()) {
-                log.info("[LLM] Tools: {}", tools.stream().map(ToolDefinition::name).toList());
+                log.debug("[LLM] Tools: {}", tools.stream().map(ToolDefinition::name).toList());
             }
         }
     }
@@ -71,7 +71,7 @@ public class LoggingObserver implements AgentObserver {
         }
 
         if (verbose && content != null) {
-            log.info("[LLM] Response content: {}", truncate(content, 1000));
+            log.debug("[LLM] Response content: {}", truncate(content, 1000));
         }
     }
 
@@ -84,7 +84,7 @@ public class LoggingObserver implements AgentObserver {
     public void onToolCallStart(String toolName, String arguments) {
         log.info("[Tool] Executing tool: {}", toolName);
         if (verbose) {
-            log.info("[Tool] Arguments: {}", truncate(arguments, 500));
+            log.debug("[Tool] Arguments: {}", truncate(arguments, 500));
         }
     }
 
@@ -92,7 +92,7 @@ public class LoggingObserver implements AgentObserver {
     public void onToolCallEnd(String toolName, String result, long duration) {
         log.info("[Tool] Tool '{}' completed in {}ms", toolName, duration);
         if (verbose) {
-            log.info("[Tool] Result: {}", truncate(result, 1000));
+            log.debug("[Tool] Result: {}", truncate(result, 1000));
         }
     }
 
