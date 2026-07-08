@@ -4,7 +4,6 @@ import com.agent.core.agent.AgentResult;
 import com.agent.core.agent.plan.PlanAndExecuteAgent;
 import com.agent.core.agent.react.ReactAgent;
 import com.agent.core.llm.OpenAILLMClient;
-import com.agent.core.memory.InMemoryStore;
 import com.agent.core.observer.LoggingObserver;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.annotation.AnnotationToolProcessor;
@@ -29,7 +28,7 @@ public class AgentDemoTests {
      * Shows how to:
      * - Create an OpenAI client
      * - Register built-in tools
-     * - Run a React Agent
+     * - Run a React Agent 需要带有记忆的agent，必须传入用户ID，支持多轮对话，【单轮对话则不需要传入】
      */
     public static void testReactAgentWithBuiltinTools() {
         if (API_KEY == null || API_KEY.isBlank()) {
@@ -44,19 +43,27 @@ public class AgentDemoTests {
         ToolRegistry registry = new ToolRegistry();
         registry.register(new CalculatorTool());
         registry.register(new DateTimeTool());
+
         LoggingObserver observer = new LoggingObserver(true);
-// 附加到组件
+
+        // 附加到组件
         llmClient.setObserver(observer);
         registry.setObserver(observer);
         // Create and run agent
-        ReactAgent agent = new ReactAgent(llmClient, registry, new InMemoryStore(), null, 10);
+        String sessionId = "user-123";
+        ReactAgent agent = new ReactAgent(llmClient, registry, 10);
         agent.setObserver(observer);
-        AgentResult result = agent.run("Calculate (15 + 27) * 3 and tell me the current time");
+        AgentResult result = agent.run("Calculate (15 + 27) * 3 and tell me the current time", sessionId);
 
         System.out.println("=== React Agent Result ===");
         System.out.println("Output: " + result.output());
         System.out.println("Steps: " + result.totalSteps());
         System.out.println("Tokens: " + result.totalTokens());
+         AgentResult result2 = agent.run("我们刚才聊了什么问题，总结一下", sessionId);
+        System.out.println("=== React Agent Result2 ===");
+        System.out.println("Output: " + result2.output());
+        System.out.println("Steps: " + result2.totalSteps());
+        System.out.println("Tokens: " + result2.totalTokens());
     }
 
     /**
@@ -84,7 +91,7 @@ public class AgentDemoTests {
         processor.register(new WeatherTools());
 
         // Create and run agent
-        ReactAgent agent = new ReactAgent(llmClient, registry, new InMemoryStore(), null, 10);
+        ReactAgent agent = new ReactAgent(llmClient, registry, 10);
         AgentResult result = agent.run("What's the weather in Beijing? Should I bring an umbrella?");
 
         System.out.println("=== Custom Tools Result ===");
@@ -105,7 +112,7 @@ public class AgentDemoTests {
         }
 
         // Create LLM client
-        var llmClient = OpenAILLMClient.openAI(API_KEY, "https://www.dmxapi.cn/v1", "deepseek-v4-flash");
+        var llmClient = OpenAILLMClient.openAI(API_KEY, "https://www.example.cn/v1", "deepseek-v4-flash");
 
         // Register tools
         ToolRegistry registry = new ToolRegistry();
@@ -115,15 +122,17 @@ public class AgentDemoTests {
         PlanAndExecuteAgent agent = new PlanAndExecuteAgent(
                 llmClient,
                 registry,
-                new InMemoryStore(),
                 10,
                 true
         );
-
+        LoggingObserver observer = new LoggingObserver(true);
+        registry.setObserver(observer);
+        agent.setObserver(observer);
+        llmClient.setObserver(observer);
         // Run complex task
         AgentResult result = agent.run(
-                "Calculate the compound interest on $1000 at 5% annual rate for 3 years, " +
-                        "then calculate how much that would be in Chinese Yuan (assume 1 USD = 7.2 CNY)"
+                "计算1000美元以年利率5%计息3年的复利总额。\n" +
+                        "然后计算该金额折合人民币的具体数额（假设1美元=7.2元人民币）。"
         );
 
         System.out.println("=== Plan-and-Execute Result ===");
@@ -144,19 +153,26 @@ public class AgentDemoTests {
             return;
         }
 
-        var llmClient = OpenAILLMClient.openAI(API_KEY, "gpt-4o-mini");
+        var llmClient = OpenAILLMClient.openAI(API_KEY, "https://www.example.cn/v1", "deepseek-v4-flash");
 
         ToolRegistry registry = new ToolRegistry();
         AnnotationToolProcessor processor = new AnnotationToolProcessor(registry);
 
         // Register multiple custom tools
         processor.register(new WeatherTools());
+        processor.register(new CurrencyTools());
         registry.register(new CalculatorTool());
 
-        ReactAgent agent = new ReactAgent(llmClient, registry, new InMemoryStore(), null, 15);
+        ReactAgent agent = new ReactAgent(llmClient, registry, 15);
+        //加日志打印
+        LoggingObserver observer = new LoggingObserver(true);
+        registry.setObserver(observer);
+        agent.setObserver(observer);
+        llmClient.setObserver(observer);
+
         AgentResult result = agent.run(
-                "I'm planning a trip to Tokyo. Check the weather there, " +
-                        "convert 10000 JPY to USD, and calculate if I have enough budget"
+                "我计划去马尔代夫旅行。请查看当地的天气情况。\n" +
+                        "将10000 CNY 兑换成美元，并计算我的预算是否充足"
         );
 
         System.out.println("=== Multiple Tools Result ===");
@@ -167,24 +183,28 @@ public class AgentDemoTests {
      * Main method to run all demos.
      */
     public static void main(String[] args) {
-        System.out.println("Starting Agent Demo Tests...\n");
+//        System.out.println("Starting Agent Demo Tests...\n");
 
         System.out.println("Demo 1: React Agent with Built-in Tools");
         testReactAgentWithBuiltinTools();
         System.out.println();
 
-//        System.out.println("Demo 2: React Agent with Custom Tools");
-//        testReactAgentWithCustomTools();
-//        System.out.println();
-//
-//        System.out.println("Demo 3: Plan-and-Execute Agent");
-//        testPlanAndExecuteAgent();
-//        System.out.println();
-//
-//        System.out.println("Demo 4: Multiple Custom Tools");
-//        testMultipleCustomTools();
-//        System.out.println();
+//         System.out.println("Demo 2: React Agent with Custom Tools");
+//         testReactAgentWithCustomTools();
+//         System.out.println();
+
+//         System.out.println("Demo 3: Plan-and-Execute Agent");
+//         testPlanAndExecuteAgent();
+//         System.out.println();
+
+//         System.out.println("Demo 4: Multiple Custom Tools");
+//         testMultipleCustomTools();
+//         System.out.println();
 
         System.out.println("All demos completed!");
     }
 }
+
+
+
+
