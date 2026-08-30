@@ -26,4 +26,17 @@ public record TokenUsage(
     public static TokenUsage of(long promptTokens, long completionTokens, long totalTokens) {
         return new TokenUsage(promptTokens, completionTokens, totalTokens, 0, 0);
     }
+
+    /**
+     * Return the sum of this usage and {@code other}, for aggregating usage across LLM calls.
+     */
+    public TokenUsage plus(TokenUsage other) {
+        return new TokenUsage(
+                promptTokens + other.promptTokens,
+                completionTokens + other.completionTokens,
+                totalTokens + other.totalTokens,
+                cachedPromptTokens + other.cachedPromptTokens,
+                reasoningTokens + other.reasoningTokens
+        );
+    }
 }

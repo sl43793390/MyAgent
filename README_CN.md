@@ -284,45 +284,6 @@ toolRegistry.setObserver(null);
 agent.setObserver(null);
 ```
 
-### Logback 配置
-
-框架使用 SLF4J 和 Logback。在 `src/main/resources/logback.xml` 中配置日志：
-
-```xml
-<configuration>
-    <!-- 控制台输出 -->
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
-    <!-- 文件输出（带滚动策略） -->
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/agent.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>logs/agent-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
-            <maxFileSize>100MB</maxFileSize>
-            <maxHistory>30</maxHistory>
-            <totalSizeCap>3GB</totalSizeCap>
-        </rollingPolicy>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
-    <!-- 控制日志级别 -->
-    <logger name="com.agent" level="DEBUG"/>
-    <logger name="com.agent.core.llm" level="INFO"/>
-    <logger name="com.agent.core.tool" level="INFO"/>
-
-    <root level="INFO">
-        <appender-ref ref="STDOUT"/>
-        <appender-ref ref="FILE"/>
-    </root>
-</configuration>
-```
-
 ### 观察者事件
 
 `AgentObserver` 接口提供以下回调：

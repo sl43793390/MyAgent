@@ -4,6 +4,9 @@ import com.agent.core.agent.AgentResult;
 import com.agent.core.agent.plan.PlanAndExecuteAgent;
 import com.agent.core.agent.react.ReactAgent;
 import com.agent.core.llm.OpenAILLMClient;
+import com.agent.core.memory.InMemoryStore;
+import com.agent.core.memory.MemoryFactory;
+import com.agent.core.memory.MySQLMemory;
 import com.agent.core.observer.LoggingObserver;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.annotation.AnnotationToolProcessor;
@@ -21,6 +24,7 @@ import com.agent.core.tool.annotation.ToolParam;
 public class AgentDemoTests {
 
     private static final String API_KEY = System.getenv("OPENAI_API_KEY");
+    private static final String BASE_URL = System.getenv("BASE_URL");
 
     /**
      * Demo 1: Basic React Agent with built-in tools.
@@ -37,7 +41,7 @@ public class AgentDemoTests {
         }
 
         // Create LLM client
-        var llmClient = OpenAILLMClient.openAI(API_KEY, "https://www.dmxapi.cn/v1", "deepseek-v4-flash");
+        var llmClient = OpenAILLMClient.openAI(API_KEY, BASE_URL, "glm-5.3-flash");
 
         // Register tools
         ToolRegistry registry = new ToolRegistry();
@@ -47,23 +51,28 @@ public class AgentDemoTests {
         LoggingObserver observer = new LoggingObserver(true);
 
         // 附加到组件
-        llmClient.setObserver(observer);
-        registry.setObserver(observer);
+//        llmClient.setObserver(observer);
+//        registry.setObserver(observer);
         // Create and run agent
         String sessionId = "user-123";
         ReactAgent agent = new ReactAgent(llmClient, registry, 10);
         agent.setObserver(observer);
+//        设置自定义对话存储方式
+//        agent.setMemoryFactory(id -> {
+//            return new MySQLMemory("jdbc:mysql://192.168.80.151:3306/my_agent","root","test",
+//                    "chat_memory",id,100000);
+//        });
         AgentResult result = agent.run("Calculate (15 + 27) * 3 and tell me the current time", sessionId);
 
         System.out.println("=== React Agent Result ===");
         System.out.println("Output: " + result.output());
-        System.out.println("Steps: " + result.totalSteps());
-        System.out.println("Tokens: " + result.totalTokens());
+//        System.out.println("Steps: " + result.totalSteps());
+//        System.out.println("Tokens: " + result.totalTokens());
          AgentResult result2 = agent.run("我们刚才聊了什么问题，总结一下", sessionId);
         System.out.println("=== React Agent Result2 ===");
         System.out.println("Output: " + result2.output());
-        System.out.println("Steps: " + result2.totalSteps());
-        System.out.println("Tokens: " + result2.totalTokens());
+//        System.out.println("Steps: " + result2.totalSteps());
+//        System.out.println("Tokens: " + result2.totalTokens());
     }
 
     /**
@@ -81,18 +90,23 @@ public class AgentDemoTests {
         }
 
         // Create LLM client
-        var llmClient = OpenAILLMClient.openAI(API_KEY, "https://www.dmxapi.cn/v1", "deepseek-v4-flash");
+        var llmClient = OpenAILLMClient.openAI(API_KEY, BASE_URL, "glm-5.3-flash");
 
         // Create tool registry and processor
         ToolRegistry registry = new ToolRegistry();
         AnnotationToolProcessor processor = new AnnotationToolProcessor(registry);
 
+        LoggingObserver observer = new LoggingObserver(true);
+
+        // 附加到组件
+        llmClient.setObserver(observer);
+        registry.setObserver(observer);
         // Register custom tool
         processor.register(new WeatherTools());
 
         // Create and run agent
         ReactAgent agent = new ReactAgent(llmClient, registry, 10);
-        AgentResult result = agent.run("What's the weather in Beijing? Should I bring an umbrella?");
+        AgentResult result = agent.run("北京天气怎么样？我是否应该带雨伞？");
 
         System.out.println("=== Custom Tools Result ===");
         System.out.println("Output: " + result.output());
@@ -112,7 +126,7 @@ public class AgentDemoTests {
         }
 
         // Create LLM client
-        var llmClient = OpenAILLMClient.openAI(API_KEY, "https://www.example.cn/v1", "deepseek-v4-flash");
+        var llmClient = OpenAILLMClient.openAI(API_KEY, BASE_URL, "glm-5.3-flash");
 
         // Register tools
         ToolRegistry registry = new ToolRegistry();
@@ -153,7 +167,7 @@ public class AgentDemoTests {
             return;
         }
 
-        var llmClient = OpenAILLMClient.openAI(API_KEY, "https://www.example.cn/v1", "deepseek-v4-flash");
+        var llmClient = OpenAILLMClient.openAI(API_KEY, BASE_URL, "glm-5.3-flash");
 
         ToolRegistry registry = new ToolRegistry();
         AnnotationToolProcessor processor = new AnnotationToolProcessor(registry);

@@ -102,7 +102,7 @@ public class PlanAndExecuteAgent extends BaseAgent {
     }
 
     private AgentResult executeTask(String userInput) {
-        int totalTokens = 0;
+        RunStats stats = new RunStats();
         int totalSteps = 0;
 
         // Phase 1: Planning
@@ -111,8 +111,8 @@ public class PlanAndExecuteAgent extends BaseAgent {
             observer.onStepStart(0, "plan");
         }
 
-        PlanResult planResult = createPlan(userInput);
-        totalTokens += planResult.tokensUsed();
+        PhaseResult planResult = createPlan(userInput);
+        stats.merge(planResult);
         List<String> steps = planResult.steps();
 
         log.info("Plan created with {} steps:", steps.size());
@@ -136,8 +136,8 @@ public class PlanAndExecuteAgent extends BaseAgent {
                 observer.onStepStart(totalSteps, "execute");
             }
 
-            ExecutionResult result = executeStep(userInput, currentStep, completedResults);
-            totalTokens += result.tokensUsed();
+            PhaseResult result = executeStep(userInput, currentStep, completedResults);
+            stats.merge(result);
             completedResults.add(result.summary());
 
             log.info("Step {} completed: {}", i + 1, truncate(result.summary(), 200));
@@ -154,10 +154,10 @@ public class PlanAndExecuteAgent extends BaseAgent {
                     observer.onStepStart(totalSteps, "replan");
                 }
 
-                ReplanResult replanResult = replan(userInput, steps, completedResults, i + 1);
-                totalTokens += replanResult.tokensUsed();
+                PhaseResult replanResult = replan(userInput, steps, completedResults, i + 1);
+                stats.merge(replanResult);
 
-                if (replanResult.isComplete()) {
+                if (replanResult.complete()) {
                     log.info("Replanner determined task is complete");
                     if (observer != null) {
                         observer.onStepEnd(totalSteps, "replan");
@@ -182,10 +182,11 @@ public class PlanAndExecuteAgent extends BaseAgent {
         String finalAnswer = generateFinalAnswer(userInput, completedResults);
         log.info("PlanAndExecuteAgent completed in {} steps", totalSteps);
 
-        return new AgentResult(finalAnswer, totalSteps, totalTokens);
+        return new AgentResult(finalAnswer, totalSteps, stats.transcript, stats.model,
+                stats.finishReason, stats.llmCalls, stats.usage);
     }
 
-    private PlanResult createPlan(String task) {
+    private PhaseResult createPlan(String task) {
         Memory planMemory = new InMemoryStore();
         planMemory.add(Message.system(PLANNER_SYSTEM_PROMPT));
         planMemory.add(Message.user("Create a plan for the following task:\n\n" + task));
@@ -194,10 +195,14 @@ public class PlanAndExecuteAgent extends BaseAgent {
         String planText = response.content();
         List<String> steps = parsePlan(planText);
 
-        return new PlanResult(steps, response.totalTokens());
+        List<Message> messages = new ArrayList<>(planMemory.getMessages());
+        messages.add(response.message());
+
+        return new PhaseResult(steps, false, null, response.model(), response.finishReason(),
+                1, response.usage(), messages);
     }
 
-    private ExecutionResult executeStep(String task, String step, List<String> completedSteps) {
+    private PhaseResult executeStep(String task, String step, List<String> completedSteps) {
         String prompt = EXECUTOR_SYSTEM_PROMPT
                 .replace("{task}", task)
                 .replace("{step}", step)
@@ -209,14 +214,20 @@ public class PlanAndExecuteAgent extends BaseAgent {
         execMemory.add(Message.system(prompt));
         execMemory.add(Message.user("Execute the step: " + step));
 
-        int tokensUsed = 0;
+        TokenUsage usage = TokenUsage.NONE;
+        String model = null;
+        String finishReason = null;
         int iterations = 0;
         int maxIterations = 5;
 
         while (iterations < maxIterations) {
             iterations++;
             LLMResponse response = llmClient.chat(execMemory.getMessages(), toolRegistry.getDefinitions(), llmParams);
-            tokensUsed += response.totalTokens();
+            usage = usage.plus(response.usage());
+            if (response.model() != null) {
+                model = response.model();
+            }
+            finishReason = response.finishReason();
 
             Message assistantMessage = response.message();
             execMemory.add(assistantMessage);
@@ -231,15 +242,17 @@ public class PlanAndExecuteAgent extends BaseAgent {
                     execMemory.add(Message.tool(toolResult, toolCall.id(), toolCall.name()));
                 }
             } else {
-                return new ExecutionResult(response.content(), tokensUsed);
+                return new PhaseResult(null, false, response.content(), model, finishReason,
+                        iterations, usage, execMemory.getMessages());
             }
         }
 
-        return new ExecutionResult("Step execution reached maximum iterations", tokensUsed);
+        return new PhaseResult(null, false, "Step execution reached maximum iterations", model, finishReason,
+                iterations, usage, execMemory.getMessages());
     }
 
-    private ReplanResult replan(String task, List<String> originalPlan,
-                                List<String> completedResults, int completedIndex) {
+    private PhaseResult replan(String task, List<String> originalPlan,
+                               List<String> completedResults, int completedIndex) {
         StringBuilder context = new StringBuilder();
         context.append("Original task: ").append(task).append("\n\n");
         context.append("Original plan:\n");
@@ -261,12 +274,16 @@ public class PlanAndExecuteAgent extends BaseAgent {
         LLMResponse response = llmClient.chat(replanMemory.getMessages(), List.of(), llmParams);
         String replanText = response.content();
 
+        List<Message> messages = new ArrayList<>(replanMemory.getMessages());
+        messages.add(response.message());
+
         if (replanText != null && replanText.trim().equalsIgnoreCase("COMPLETE")) {
-            return new ReplanResult(List.of(), true, response.totalTokens());
+            return new PhaseResult(List.of(), true, null, response.model(), response.finishReason(),
+                    1, response.usage(), messages);
         }
 
-        List<String> newSteps = parsePlan(replanText);
-        return new ReplanResult(newSteps, false, response.totalTokens());
+        return new PhaseResult(parsePlan(replanText), false, null, response.model(), response.finishReason(),
+                1, response.usage(), messages);
     }
 
     private String generateFinalAnswer(String task, List<String> completedResults) {
@@ -313,8 +330,34 @@ public class PlanAndExecuteAgent extends BaseAgent {
         return text.length() > maxLength ? text.substring(0, maxLength) + "..." : text;
     }
 
-    // Internal records
-    private record PlanResult(List<String> steps, int tokensUsed) {}
-    private record ExecutionResult(String summary, int tokensUsed) {}
-    private record ReplanResult(List<String> steps, boolean isComplete, int tokensUsed) {}
+    // Internal record: outcome of one agent phase (plan / execute / replan)
+    private record PhaseResult(
+            List<String> steps,
+            boolean complete,
+            String summary,
+            String model,
+            String finishReason,
+            int llmCalls,
+            TokenUsage usage,
+            List<Message> messages
+    ) {}
+
+    // Mutable accumulator for run-wide metadata merged from every phase
+    private static final class RunStats {
+        private TokenUsage usage = TokenUsage.NONE;
+        private String model;
+        private String finishReason;
+        private int llmCalls;
+        private final List<Message> transcript = new ArrayList<>();
+
+        private void merge(PhaseResult phase) {
+            usage = usage.plus(phase.usage());
+            llmCalls += phase.llmCalls();
+            if (phase.model() != null) {
+                model = phase.model();
+            }
+            finishReason = phase.finishReason();
+            transcript.addAll(phase.messages());
+        }
+    }
 }

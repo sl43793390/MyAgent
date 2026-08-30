@@ -284,45 +284,6 @@ toolRegistry.setObserver(null);
 agent.setObserver(null);
 ```
 
-### Logback Configuration
-
-The framework uses SLF4J with Logback. Configure logging in `src/main/resources/logback.xml`:
-
-```xml
-<configuration>
-    <!-- Console output -->
-    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
-        <encoder>
-            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
-    <!-- File output with rolling policy -->
-    <appender name="FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
-        <file>logs/agent.log</file>
-        <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
-            <fileNamePattern>logs/agent-%d{yyyy-MM-dd}.%i.log</fileNamePattern>
-            <maxFileSize>100MB</maxFileSize>
-            <maxHistory>30</maxHistory>
-            <totalSizeCap>3GB</totalSizeCap>
-        </rollingPolicy>
-        <encoder>
-            <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger{36} - %msg%n</pattern>
-        </encoder>
-    </appender>
-
-    <!-- Control log levels -->
-    <logger name="com.agent" level="DEBUG"/>
-    <logger name="com.agent.core.llm" level="INFO"/>
-    <logger name="com.agent.core.tool" level="INFO"/>
-
-    <root level="INFO">
-        <appender-ref ref="STDOUT"/>
-        <appender-ref ref="FILE"/>
-    </root>
-</configuration>
-```
-
 ### Observer Events
 
 The `AgentObserver` interface provides callbacks for:

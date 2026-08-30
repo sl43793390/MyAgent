@@ -75,7 +75,10 @@ public class ReactAgent extends BaseAgent {
     }
 
     private AgentResult executeWithContext(Memory context) {
-        int totalTokens = 0;
+        TokenUsage totalUsage = TokenUsage.NONE;
+        String model = null;
+        String finishReason = null;
+        int llmCallCount = 0;
         int step = 0;
 
         while (step < maxIterations) {
@@ -89,7 +92,12 @@ public class ReactAgent extends BaseAgent {
 
             // Call LLM
             LLMResponse response = callLLM(context);
-            totalTokens += response.totalTokens();
+            totalUsage = totalUsage.plus(response.usage());
+            if (response.model() != null) {
+                model = response.model();
+            }
+            finishReason = response.finishReason();
+            llmCallCount++;
 
             Message assistantMessage = response.message();
             context.add(assistantMessage);
@@ -122,8 +130,8 @@ public class ReactAgent extends BaseAgent {
 
                 // No tool calls - this is the final answer
                 log.info("ReactAgent completed in {} steps", step);
-                String output = response.content();
-                return new AgentResult(output, step, totalTokens);
+                return new AgentResult(response.content(), step, context.getMessages(),
+                        model, finishReason, llmCallCount, totalUsage);
             }
 
             // Notify observer
@@ -134,7 +142,8 @@ public class ReactAgent extends BaseAgent {
 
         // Max iterations reached
         log.warn("ReactAgent reached max iterations ({})", maxIterations);
-        return new AgentResult("Reached maximum iterations without a final answer.", step, totalTokens);
+        return new AgentResult("Reached maximum iterations without a final answer.", step,
+                context.getMessages(), model, finishReason, llmCallCount, totalUsage);
     }
 
     private String truncate(String text, int maxLength) {
