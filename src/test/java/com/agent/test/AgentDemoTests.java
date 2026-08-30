@@ -10,8 +10,7 @@ import com.agent.core.memory.MySQLMemory;
 import com.agent.core.observer.LoggingObserver;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.annotation.AnnotationToolProcessor;
-import com.agent.core.tool.builtin.CalculatorTool;
-import com.agent.core.tool.builtin.DateTimeTool;
+import com.agent.core.tool.builtin.*;
 import com.agent.core.tool.annotation.Tool;
 import com.agent.core.tool.annotation.ToolParam;
 
@@ -45,14 +44,18 @@ public class AgentDemoTests {
 
         // Register tools
         ToolRegistry registry = new ToolRegistry();
-        registry.register(new CalculatorTool());
+        registry.register(new CommandExecutionTool());
         registry.register(new DateTimeTool());
+        registry.register(new FileEditTool());
+        registry.register(new FileListTool());
+        registry.register(new FileWriteTool());
+        registry.register(new FileReadTool());
 
         LoggingObserver observer = new LoggingObserver(true);
 
         // 附加到组件
-//        llmClient.setObserver(observer);
-//        registry.setObserver(observer);
+        llmClient.setObserver(observer);
+        registry.setObserver(observer);
         // Create and run agent
         String sessionId = "user-123";
         ReactAgent agent = new ReactAgent(llmClient, registry, 10);
@@ -62,15 +65,17 @@ public class AgentDemoTests {
 //            return new MySQLMemory("jdbc:mysql://192.168.80.151:3306/my_agent","root","test",
 //                    "chat_memory",id,100000);
 //        });
-        AgentResult result = agent.run("Calculate (15 + 27) * 3 and tell me the current time", sessionId);
+//        AgentResult result = agent.run("Calculate (15 + 27) * 3 and tell me the current time", sessionId);
+        AgentResult result = agent.run("写一首七言绝句，主题是春天，要立意深远，不能浅显，最后保存到项目根目录下的markdown格式文档中", sessionId);
 
         System.out.println("=== React Agent Result ===");
         System.out.println("Output: " + result.output());
 //        System.out.println("Steps: " + result.totalSteps());
 //        System.out.println("Tokens: " + result.totalTokens());
-         AgentResult result2 = agent.run("我们刚才聊了什么问题，总结一下", sessionId);
-        System.out.println("=== React Agent Result2 ===");
-        System.out.println("Output: " + result2.output());
+
+//         AgentResult result2 = agent.run("我们刚才聊了什么问题，总结一下", sessionId);
+//        System.out.println("=== React Agent Result2 ===");
+//        System.out.println("Output: " + result2.output());
 //        System.out.println("Steps: " + result2.totalSteps());
 //        System.out.println("Tokens: " + result2.totalTokens());
     }
@@ -102,7 +107,7 @@ public class AgentDemoTests {
         llmClient.setObserver(observer);
         registry.setObserver(observer);
         // Register custom tool
-        processor.register(new WeatherTools());
+//        processor.register(new WeatherTools());
 
         // Create and run agent
         ReactAgent agent = new ReactAgent(llmClient, registry, 10);
