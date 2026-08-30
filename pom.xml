@@ -28,10 +28,11 @@
     <dependencies>
         <!-- OpenAI Java SDK -->
         <!-- Source: https://mvnrepository.com/artifact/com.openai/openai-java -->
+        <!-- Source: https://mvnrepository.com/artifact/com.openai/openai-java -->
         <dependency>
             <groupId>com.openai</groupId>
             <artifactId>openai-java</artifactId>
-            <version>4.32.0</version>
+            <version>4.52.0</version>
             <scope>compile</scope>
         </dependency>
         <!-- Jackson for JSON processing -->
