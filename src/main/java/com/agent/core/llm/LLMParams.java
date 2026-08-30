@@ -25,10 +25,27 @@ public record LLMParams(
         String stop
 ) {
 
+    public static final double DEFAULT_TEMPERATURE = 0.7;
+    public static final int DEFAULT_MAX_COMPLETION_TOKENS = 4096;
+
     /**
      * Default parameters: temperature=0.7, maxCompletionTokens=4096.
      */
     public static final LLMParams DEFAULT = builder().build();
+
+    /**
+     * Temperature actually applied to the LLM call: the configured value or the default.
+     */
+    public double effectiveTemperature() {
+        return temperature != null ? temperature : DEFAULT_TEMPERATURE;
+    }
+
+    /**
+     * Max completion tokens actually applied to the LLM call: the configured value or the default.
+     */
+    public int effectiveMaxCompletionTokens() {
+        return maxCompletionTokens != null ? maxCompletionTokens : DEFAULT_MAX_COMPLETION_TOKENS;
+    }
 
     public static Builder builder() {
         return new Builder();

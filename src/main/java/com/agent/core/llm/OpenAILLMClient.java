@@ -13,8 +13,8 @@ import com.openai.models.completions.CompletionUsage;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * OpenAI LLM client implementation using the official OpenAI Java SDK.
@@ -98,91 +98,35 @@ public class OpenAILLMClient implements LLMClient {
 
     @Override
     public LLMResponse chat(List<Message> messages, List<ToolDefinition> tools, LLMParams params) {
+        List<ToolDefinition> effectiveTools = tools != null ? tools : List.of();
+        LLMParams effectiveParams = params != null ? params : LLMParams.DEFAULT;
         long startTime = System.currentTimeMillis();
 
         try {
-            // Notify observer before LLM call
             if (observer != null) {
-                observer.onLLMCallStart(messages, tools != null ? tools : List.of());
+                observer.onLLMCallStart(messages, effectiveTools);
             }
 
-            ChatCompletionCreateParams.Builder paramsBuilder = ChatCompletionCreateParams.builder()
-                    .model(model);
+            log.debug("Sending request to OpenAI: model={}, messages={}, tools={}",
+                    model, messages.size(), effectiveTools.size());
 
-            // Apply custom parameters
-            if (params != null) {
-                if (params.temperature() != null) {
-                    paramsBuilder.temperature(params.temperature());
-                } else {
-                    paramsBuilder.temperature(0.7);
-                }
+            ChatCompletion completion = client.chat().completions()
+                    .create(buildRequest(messages, effectiveTools, effectiveParams));
 
-                if (params.topP() != null) {
-                    paramsBuilder.topP(params.topP());
-                }
+            LLMResponse response = mapResponse(completion);
 
-                if (params.maxCompletionTokens() != null) {
-                    paramsBuilder.maxCompletionTokens(params.maxCompletionTokens());
-                } else {
-                    paramsBuilder.maxCompletionTokens(4096);
-                }
+            log.debug("Received response from OpenAI: id={}, finishReason={}, usage={}",
+                    response.id(), response.finishReason(), response.usage());
 
-                if (params.frequencyPenalty() != null) {
-                    paramsBuilder.frequencyPenalty(params.frequencyPenalty());
-                }
-
-                if (params.presencePenalty() != null) {
-                    paramsBuilder.presencePenalty(params.presencePenalty());
-                }
-
-                if (params.seed() != null) {
-                    paramsBuilder.seed(params.seed());
-                }
-
-                if (params.stop() != null && !params.stop().isEmpty()) {
-                    paramsBuilder.stop(params.stop());
-                }
-            } else {
-                paramsBuilder.temperature(0.7);
-                paramsBuilder.maxCompletionTokens(4096);
-            }
-
-            // Add messages
-            for (Message message : messages) {
-                paramsBuilder.addMessage(mapMessage(message));
-            }
-
-            // Add tools if present
-            if (tools != null && !tools.isEmpty()) {
-                for (ToolDefinition tool : tools) {
-                    paramsBuilder.addTool(mapTool(tool));
-                }
-            }
-
-            ChatCompletionCreateParams createParams = paramsBuilder.build();
-
-            log.debug("Sending request to OpenAI with {} messages and {} tools",
-                    messages.size(), tools != null ? tools.size() : 0);
-
-            ChatCompletion completion = client.chat().completions().create(createParams);
-
-            log.debug("Received response from OpenAI");
-
-            LLMResponse response = mapToLLMResponse(completion);
-
-            // Notify observer after LLM call
             if (observer != null) {
-                long duration = System.currentTimeMillis() - startTime;
-                observer.onLLMCallEnd(response, duration);
+                observer.onLLMCallEnd(response, System.currentTimeMillis() - startTime);
             }
 
             return response;
 
         } catch (Exception e) {
-            // Notify observer on error
             if (observer != null) {
-                long duration = System.currentTimeMillis() - startTime;
-                observer.onLLMCallError(e, duration);
+                observer.onLLMCallError(e, System.currentTimeMillis() - startTime);
             }
 
             log.error("Failed to call OpenAI API: {}", e.getMessage(), e);
@@ -190,133 +134,155 @@ public class OpenAILLMClient implements LLMClient {
         }
     }
 
-    private ChatCompletionMessageParam mapMessage(Message message) {
-        switch (message.role()) {
-            case SYSTEM:
-                return ChatCompletionMessageParam.ofSystem(
-                        ChatCompletionSystemMessageParam.builder()
-                                .content(message.content() != null ? message.content() : "")
-                                .build()
-                );
+    private ChatCompletionCreateParams buildRequest(List<Message> messages,
+                                                    List<ToolDefinition> tools,
+                                                    LLMParams params) {
+        ChatCompletionCreateParams.Builder builder = ChatCompletionCreateParams.builder()
+                .model(model)
+                .temperature(params.effectiveTemperature())
+                .maxCompletionTokens(params.effectiveMaxCompletionTokens());
 
-            case USER:
-                return ChatCompletionMessageParam.ofUser(
-                        ChatCompletionUserMessageParam.builder()
-                                .content(message.content() != null ? message.content() : "")
-                                .build()
-                );
-
-            case ASSISTANT:
-                ChatCompletionAssistantMessageParam.Builder assistantBuilder =
-                        ChatCompletionAssistantMessageParam.builder();
-
-                if (message.content() != null) {
-                    assistantBuilder.content(message.content());
-                }
-
-                if (message.hasToolCalls()) {
-                    List<ChatCompletionMessageToolCall> toolCalls = new ArrayList<>();
-                    for (ToolCall tc : message.toolCalls()) {
-                        // Build function call using ChatCompletionMessageFunctionToolCall
-                        ChatCompletionMessageFunctionToolCall.Function function =
-                                ChatCompletionMessageFunctionToolCall.Function.builder()
-                                        .name(tc.name())
-                                        .arguments(tc.arguments())
-                                        .build();
-
-                        ChatCompletionMessageFunctionToolCall functionToolCall =
-                                ChatCompletionMessageFunctionToolCall.builder()
-                                        .id(tc.id())
-                                        .function(function)
-                                        .build();
-
-                        // Wrap in ChatCompletionMessageToolCall union type
-                        ChatCompletionMessageToolCall toolCall =
-                                ChatCompletionMessageToolCall.ofFunction(functionToolCall);
-
-                        toolCalls.add(toolCall);
-                    }
-                    assistantBuilder.toolCalls(toolCalls);
-                }
-
-                return ChatCompletionMessageParam.ofAssistant(assistantBuilder.build());
-
-            case TOOL:
-                return ChatCompletionMessageParam.ofTool(
-                        ChatCompletionToolMessageParam.builder()
-                                .content(message.content() != null ? message.content() : "")
-                                .toolCallId(message.toolCallId() != null ? message.toolCallId() : "")
-                                .build()
-                );
-
-            default:
-                throw new IllegalArgumentException("Unknown message role: " + message.role());
+        if (params.topP() != null) {
+            builder.topP(params.topP());
         }
+        if (params.frequencyPenalty() != null) {
+            builder.frequencyPenalty(params.frequencyPenalty());
+        }
+        if (params.presencePenalty() != null) {
+            builder.presencePenalty(params.presencePenalty());
+        }
+        if (params.seed() != null) {
+            builder.seed(params.seed());
+        }
+        if (params.stop() != null && !params.stop().isEmpty()) {
+            builder.stop(params.stop());
+        }
+
+        messages.forEach(message -> builder.addMessage(mapMessage(message)));
+        tools.forEach(tool -> builder.addTool(mapTool(tool)));
+
+        return builder.build();
+    }
+
+    private ChatCompletionMessageParam mapMessage(Message message) {
+        return switch (message.role()) {
+            case SYSTEM -> ChatCompletionMessageParam.ofSystem(
+                    ChatCompletionSystemMessageParam.builder()
+                            .content(orEmpty(message.content()))
+                            .build()
+            );
+            case USER -> ChatCompletionMessageParam.ofUser(
+                    ChatCompletionUserMessageParam.builder()
+                            .content(orEmpty(message.content()))
+                            .build()
+            );
+            case ASSISTANT -> ChatCompletionMessageParam.ofAssistant(mapAssistantMessage(message));
+            case TOOL -> ChatCompletionMessageParam.ofTool(
+                    ChatCompletionToolMessageParam.builder()
+                            .content(orEmpty(message.content()))
+                            .toolCallId(orEmpty(message.toolCallId()))
+                            .build()
+            );
+        };
+    }
+
+    private ChatCompletionAssistantMessageParam mapAssistantMessage(Message message) {
+        ChatCompletionAssistantMessageParam.Builder builder =
+                ChatCompletionAssistantMessageParam.builder();
+
+        if (message.content() != null) {
+            builder.content(message.content());
+        }
+
+        if (message.hasToolCalls()) {
+            builder.toolCalls(message.toolCalls().stream()
+                    .map(tc -> ChatCompletionMessageToolCall.ofFunction(
+                            ChatCompletionMessageFunctionToolCall.builder()
+                                    .id(tc.id())
+                                    .function(ChatCompletionMessageFunctionToolCall.Function.builder()
+                                            .name(tc.name())
+                                            .arguments(tc.arguments() != null ? tc.arguments() : "{}")
+                                            .build())
+                                    .build()))
+                    .toList());
+        }
+
+        return builder.build();
     }
 
     private ChatCompletionFunctionTool mapTool(ToolDefinition tool) {
-        // Build function parameters from JSON schema
-        FunctionParameters.Builder paramsBuilder = FunctionParameters.builder()
-                .putAdditionalProperty("type", JsonValue.from("object"))
-                .putAdditionalProperty("properties", JsonValue.from(tool.parameters().get("properties")))
-                .putAdditionalProperty("required", JsonValue.from(tool.parameters().get("required")));
+        Map<String, Object> schema = tool.parameters() != null ? tool.parameters() : Map.of();
 
-        FunctionDefinition functionDef = FunctionDefinition.builder()
-                .name(tool.name())
-                .description(tool.description())
-                .parameters(paramsBuilder.build())
-                .build();
+        FunctionParameters.Builder parameters = FunctionParameters.builder()
+                .putAdditionalProperty("type", JsonValue.from(schema.getOrDefault("type", "object")))
+                .putAdditionalProperty("properties",
+                        JsonValue.from(schema.getOrDefault("properties", Map.of())));
+
+        if (schema.containsKey("required")) {
+            parameters.putAdditionalProperty("required", JsonValue.from(schema.get("required")));
+        }
 
         return ChatCompletionFunctionTool.builder()
-                .function(functionDef)
+                .function(FunctionDefinition.builder()
+                        .name(tool.name())
+                        .description(tool.description())
+                        .parameters(parameters.build())
+                        .build())
                 .build();
     }
 
-    private LLMResponse mapToLLMResponse(ChatCompletion completion) {
+    private LLMResponse mapResponse(ChatCompletion completion) {
         if (completion.choices() == null || completion.choices().isEmpty()) {
-            throw new RuntimeException("No choices in OpenAI response");
+            throw new IllegalStateException("No choices in OpenAI response");
         }
 
         ChatCompletion.Choice choice = completion.choices().get(0);
         ChatCompletionMessage message = choice.message();
 
-        // Extract tool calls
-        List<ToolCall> toolCalls = null;
-        if (message.toolCalls().isPresent() && !message.toolCalls().get().isEmpty()) {
-            toolCalls = message.toolCalls().get().stream()
-                    .filter(ChatCompletionMessageToolCall::isFunction)
-                    .map(tc -> {
-                        ChatCompletionMessageFunctionToolCall functionToolCall = tc.asFunction();
-                        return new ToolCall(
-                                functionToolCall.id(),
-                                functionToolCall.function().name(),
-                                functionToolCall.function().arguments()
-                        );
-                    })
-                    .toList();
-        }
+        String content = message.content().orElse(null);
 
-        // Extract content
-        String content = message.content().isPresent() ? message.content().get() : null;
+        List<ToolCall> toolCalls = message.toolCalls()
+                .map(calls -> calls.stream()
+                        .filter(ChatCompletionMessageToolCall::isFunction)
+                        .map(tc -> {
+                            ChatCompletionMessageFunctionToolCall function = tc.asFunction();
+                            return new ToolCall(
+                                    function.id(),
+                                    function.function().name(),
+                                    function.function().arguments()
+                            );
+                        })
+                        .toList())
+                .orElse(List.of());
 
-        // Create our Message
-        Message ourMessage = new Message(
-                Role.ASSISTANT,
-                content,
-                null,
-                null,
-                toolCalls
+        Message assistantMessage = new Message(Role.ASSISTANT, content, null, null, toolCalls);
+
+        return new LLMResponse(
+                assistantMessage,
+                completion.id(),
+                completion.model(),
+                choice.finishReason() != null ? choice.finishReason().asString() : null,
+                mapUsage(completion)
         );
+    }
 
-        // Extract token usage
-        long promptTokens = 0;
-        long completionTokens = 0;
-        if (completion.usage().isPresent()) {
-            CompletionUsage usage = completion.usage().get();
-            promptTokens = usage.promptTokens();
-            completionTokens = usage.completionTokens();
-        }
+    private TokenUsage mapUsage(ChatCompletion completion) {
+        return completion.usage()
+                .map(usage -> new TokenUsage(
+                        usage.promptTokens(),
+                        usage.completionTokens(),
+                        usage.totalTokens(),
+                        usage.promptTokensDetails()
+                                .flatMap(CompletionUsage.PromptTokensDetails::cachedTokens)
+                                .orElse(0L),
+                        usage.completionTokensDetails()
+                                .flatMap(CompletionUsage.CompletionTokensDetails::reasoningTokens)
+                                .orElse(0L)
+                ))
+                .orElse(TokenUsage.NONE);
+    }
 
-        return new LLMResponse(ourMessage, (int) promptTokens, (int) completionTokens);
+    private static String orEmpty(String value) {
+        return value != null ? value : "";
     }
 }
