@@ -28,7 +28,6 @@
     <dependencies>
         <!-- OpenAI Java SDK -->
         <!-- Source: https://mvnrepository.com/artifact/com.openai/openai-java -->
-        <!-- Source: https://mvnrepository.com/artifact/com.openai/openai-java -->
         <dependency>
             <groupId>com.openai</groupId>
             <artifactId>openai-java</artifactId>
@@ -101,9 +100,6 @@
                 <configuration>
                     <source>21</source>
                     <target>21</target>
-                    <compilerArgs>
-                        <arg>--enable-preview</arg>
-                    </compilerArgs>
                 </configuration>
             </plugin>
             <plugin>
@@ -113,7 +109,9 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.agent.App</mainClass>
+                            <!-- This module is a library; it has no standalone main class.
+                                 Runnable demos live under src/test (e.g. AgentDemoTests). -->
+                            <addClasspath>false</addClasspath>
                         </manifest>
                     </archive>
                 </configuration>
