@@ -1,114 +1,88 @@
-# Java Agent Framework
+# Java Agent Framework (my-agent)
 
-A Java 21 agent framework implementing React Agent and Plan-and-Execute Agent patterns for building AI-powered applications.
+A Java 21 agent framework implementing **React Agent** and **Plan-and-Execute Agent** patterns for building AI-powered applications. It is shipped as a **library** (`com.agent:my-agent:1.0.0`) with no standalone `main` class; runnable demos live under `src/test`.
 
 ## Features
 
-- **React Agent**: Implements the Reasoning + Acting pattern with Thought → Action → Observation loop
-- **Plan-and-Execute Agent**: Two-phase approach with planning and execution stages
-- **Tool System**: Extensible tool registry with built-in tools (calculator, datetime, web fetch)
-- **Annotation-based Tools**: Create tools using `@Tool` and `@ToolParam` annotations (Spring AI style)
-- **Memory Management**: Conversation history management with multiple backends (in-memory, Redis, MySQL)
-- **Observability**: Built-in observer interface for monitoring LLM calls, tool executions, and agent steps
-- **OpenAI SDK**: Uses official OpenAI Java SDK (4.32.0) for reliable API integration
-- **Java 21**: Leverages modern Java features for clean, efficient code
+- **React Agent** — a bounded Thought → Action → Observation loop with per-session serialisation and a run budget.
+- **Plan-and-Execute Agent** — an explicit state machine (Plan → Execute → Replan → Synthesize) that genuinely honours the session id.
+- **Tool system** — an extensible `ToolRegistry` with per-tool timeout and risk-level gating; 10 built-in tools.
+- **Annotation tools** — create tools with `@Tool` / `@ToolParam` (Spring AI style).
+- **Memory management** — `Memory` + `AbstractMemory` base class over in-memory / Redis / MySQL backends, switchable in one line, with automatic threshold compression.
+- **Security boundaries** — `PathSandbox` (file sandbox), `UrlGuard` (anti-SSRF), `ToolPolicy` (capability admission); dangerous tools are refused by default.
+- **Observability** — `AgentObserver` for LLM calls, tool executions and agent steps.
+- **Session management** — `SessionManager` with TTL, capacity bound, LRU eviction and per-session locks.
+- **OpenAI SDK** — official OpenAI Java SDK (4.52.0), works against any OpenAI-compatible endpoint.
+- **Java 21** — records, text blocks, switch expressions.
 
 ## Architecture
 
 ```
-java-agent/
-├── src/main/java/com/agent/
-│   ├── core/
-│   │   ├── agent/
-│   │   │   ├── BaseAgent.java              # Base agent class
-│   │   │   ├── AgentResult.java            # Agent execution result
-│   │   │   ├── react/
-│   │   │   │   └── ReactAgent.java         # React Agent implementation
-│   │   │   └── plan/
-│   │   │       └── PlanAndExecuteAgent.java # Plan-and-Execute Agent
-│   │   ├── llm/
-│   │   │   ├── LLMClient.java              # LLM client interface
-│   │   │   └── OpenAILLMClient.java        # OpenAI SDK implementation
-│   │   ├── memory/
-│   │   │   ├── Memory.java                 # Memory interface
-│   │   │   ├── InMemoryStore.java          # In-memory implementation
-│   │   │   ├── RedisMemory.java            # Redis implementation
-│   │   │   └── MySQLMemory.java            # MySQL implementation
-│   │   ├── model/
-│   │   │   ├── Message.java                # Message model
-│   │   │   ├── Role.java                   # Message roles
-│   │   │   ├── ToolCall.java               # Tool call model
-│   │   │   └── LLMResponse.java            # LLM response model
-│   │   ├── observer/
-│   │   │   ├── AgentObserver.java          # Observer interface
-│   │   │   └── LoggingObserver.java        # Logging implementation
-│   │   └── tool/
-│   │       ├── Tool.java                   # Tool interface
-│   │       ├── ToolDefinition.java         # Tool definition
-│   │       ├── ToolRegistry.java           # Tool registry
-│   │       ├── annotation/                 # Annotation-based tools
-│   │       │   ├── Tool.java               # @Tool annotation
-│   │       │   ├── ToolParam.java          # @ToolParam annotation
-│   │       │   ├── AnnotationToolProcessor.java
-│   │       │   └── AnnotatedMethodTool.java
-│   │       └── builtin/                    # Built-in tools
-│   │           ├── CalculatorTool.java
-│   │           ├── DateTimeTool.java
-│   │           └── WebFetchTool.java
-│   └── example/
-│       └── ExampleApp.java                 # Example application
-├── src/test/java/com/agent/test/
-│   └── AgentDemoTests.java                 # Demo tests
-└── pom.xml
+src/main/java/com/agent/
+└── core/
+    ├── agent/
+    │   ├── BaseAgent.java                 # abstract base: sessions / budget / compression
+    │   ├── AgentResult.java  RunBudget.java
+    │   ├── react/ReactAgent.java
+    │   └── plan/PlanAndExecuteAgent.java
+    ├── llm/
+    │   ├── LLMClient.java  LLMParams.java
+    │   ├── OpenAILLMClient.java  LLMException.java
+    ├── memory/
+    │   ├── Memory.java  AbstractMemory.java  MemoryFactory.java
+    │   ├── InMemoryStore.java  RedisMemory.java  MySQLMemory.java
+    │   ├── MemoryCompressor.java  TokenEstimator.java  JsonSupport.java
+    ├── model/   Message.java  Role.java  ToolCall.java  LLMResponse.java  TokenUsage.java
+    ├── observer/ AgentObserver.java  LoggingObserver.java
+    ├── security/ PathSandbox.java  UrlGuard.java  ToolPolicy.java
+    ├── session/ SessionManager.java
+    └── tool/
+        ├── Tool.java  ToolDefinition.java  ToolResult.java  RiskLevel.java  ToolRegistry.java
+        ├── annotation/ Tool.java(@Tool) ToolParam.java AnnotationToolProcessor.java AnnotatedMethodTool.java
+        └── builtin/ CalculatorTool DateTimeTool WebFetchTool
+                     FileReadTool FileWriteTool FileEditTool FileListTool FileSearchTool
+                     CommandExecutionTool Args.java
+src/test/java/com/agent/test/
+    AgentDemoTests.java  WeatherTools.java  CurrencyTools.java  MemorySwitchDemo.java
+pom.xml
 ```
+
+> Earlier README referenced `example/ExampleApp.java` and `com.agent.App` — those do not exist; this module is a library.
 
 ## Prerequisites
 
 - Java 21 or higher
 - Maven 3.8+
-- OpenAI API key (or compatible API)
+- An OpenAI API key (or any OpenAI-compatible endpoint: DeepSeek / GLM / vLLM / Ollama / One-API)
 
-## Installation
-
-1. Clone or navigate to the project directory:
+## Build & run demos
 
 ```bash
-cd d:\tareSpace\MyAgent
+cd d:\ideaSpace\MyAgent
+mvn clean package
 ```
 
-2. Build the project:
+The framework has no `java -jar` entry point. To run demos (requires `OPENAI_API_KEY`):
 
 ```bash
-mvn clean package
+# run the in-memory / Redis / MySQL memory-switching demo
+mvn compile exec:java -Dexec.mainClass="com.agent.test.MemorySwitchDemo" -Dexec.classpathScope=test
 ```
 
 ## Configuration
 
-Set your OpenAI API key as an environment variable:
-
 ```bash
 # Linux/Mac
 export OPENAI_API_KEY=your-api-key-here
-
 # Windows PowerShell
 $env:OPENAI_API_KEY="your-api-key-here"
+# optional custom gateway
+# export OPENAI_BASE_URL=https://your-gateway/v1
 ```
 
 ## Usage
 
-### Running the Example
-
-```bash
-mvn exec:java -Dexec.mainClass="com.agent.App"
-```
-
-Or run the packaged JAR:
-
-```bash
-java -jar target/java-agent-1.0.0.jar
-```
-
-### Using React Agent
+### React Agent
 
 ```java
 import com.agent.core.agent.react.ReactAgent;
@@ -116,44 +90,35 @@ import com.agent.core.llm.OpenAILLMClient;
 import com.agent.core.tool.ToolRegistry;
 import com.agent.core.tool.builtin.CalculatorTool;
 
-// Initialize LLM client
-LLMClient llmClient = OpenAILLMClient.openAI(apiKey, "gpt-4o-mini");
+LLMClient llmClient = OpenAILLMClient.openAI(apiKey, "gpt-4o-mini"); // or openAI(apiKey, baseUrl, model)
 
-// Register tools
-ToolRegistry toolRegistry = new ToolRegistry();
-toolRegistry.register(new CalculatorTool());
+ToolRegistry registry = new ToolRegistry();
+registry.register(new CalculatorTool());
 
-// Create React Agent
-ReactAgent agent = new ReactAgent(llmClient, toolRegistry, 10);
+ReactAgent agent = new ReactAgent(llmClient, registry, 10); // max iterations
 
-// Run agent
-AgentResult result = agent.run("Calculate (15 + 27) * 3");
+AgentResult result = agent.run("Calculate (15 + 27) * 3");   // stateless
 System.out.println(result.output());
+
+String sessionId = "user-123";                               // stateful multi-turn
+agent.run("calculate 15*27", sessionId);
+AgentResult r2 = agent.run("what was the previous result?", sessionId);
 ```
 
-### Using Plan-and-Execute Agent
+Pass a `sessionId` for memory across turns; concurrent calls sharing one session id are serialised automatically by the session lock.
+
+### Plan-and-Execute Agent
 
 ```java
 import com.agent.core.agent.plan.PlanAndExecuteAgent;
 
-// Create Plan-and-Execute Agent
-PlanAndExecuteAgent agent = new PlanAndExecuteAgent(
-    llmClient,
-    toolRegistry,
-    10,      // max steps
-    true     // enable replanning
-);
-
-// Run agent
-AgentResult result = agent.run("Research AI trends and create a summary");
-System.out.println(result.output());
+PlanAndExecuteAgent agent = new PlanAndExecuteAgent(llmClient, registry, 10, true); // steps, replan
+AgentResult result = agent.run("Research AI trends and write a 200-word summary");
 ```
 
-### Creating Custom Tools
+### Custom tools
 
-#### Method 1: Annotation-based (Recommended)
-
-Use `@Tool` and `@ToolParam` annotations for simpler tool creation:
+#### Method 1 — annotation (recommended)
 
 ```java
 import com.agent.core.tool.annotation.Tool;
@@ -161,215 +126,96 @@ import com.agent.core.tool.annotation.ToolParam;
 
 public class WeatherTools {
     @Tool(name = "get_weather", description = "Get current weather for a city")
-    public String getWeather(
-            @ToolParam(name = "city", description = "City name") String city
-    ) {
+    public String getWeather(@ToolParam(name = "city", description = "City name") String city) {
         return String.format("Weather in %s: 22°C, Sunny", city);
     }
 }
-
-// Register the tool
-AnnotationToolProcessor processor = new AnnotationToolProcessor(toolRegistry);
-processor.register(new WeatherTools());
+new AnnotationToolProcessor(registry).register(new WeatherTools());
 ```
 
-#### Method 2: Implement Tool Interface
+#### Method 2 — implement `Tool` (must return `ToolResult`)
+
+> `Tool.execute` returns a **`ToolResult`**, not a `String`. Use it to express success vs. permanent failure vs. retryable failure so the model can correct itself and the registry can fire error callbacks.
 
 ```java
-import com.agent.core.tool.Tool;
-import com.agent.core.tool.ToolDefinition;
-import java.util.Map;
+import com.agent.core.tool.*;
 
-public class MyCustomTool implements Tool {
-    @Override
-    public ToolDefinition getDefinition() {
-        return ToolDefinition.simple(
-            "my_tool",
-            "Description of what the tool does",
-            "param1",
-            "Description of parameter"
-        );
+public class MyTool implements Tool {
+    @Override public ToolDefinition getDefinition() {
+        return ToolDefinition.simple("my_tool", "Description", "param1", "Param description");
     }
 
-    @Override
-    public String execute(Map<String, Object> arguments) {
-        String param1 = (String) arguments.get("param1");
-        // Implement tool logic
-        return "Result: " + param1;
+    @Override public ToolResult execute(Map<String, Object> args) {
+        Object v = args.get("param1");
+        if (v == null) return ToolResult.retryable("Missing param1"); // model may fix & retry
+        return ToolResult.success("Result: " + v);
     }
+    // optional: @Override public RiskLevel riskLevel() { return RiskLevel.SENSITIVE; }
+    // optional: @Override public Duration timeout() { return Duration.ofSeconds(30); }
 }
-
-// Register the tool
-toolRegistry.register(new MyCustomTool());
+registry.register(new MyTool());
 ```
 
-## Observability and Logging
+### Dangerous tools require explicit opt-in
 
-The framework provides a comprehensive observability system through the `AgentObserver` interface, allowing you to monitor and debug agent execution at every stage.
+`CommandExecutionTool` is `DANGEROUS` (arbitrary shell execution) and is refused by the registry unless enabled:
 
-### Enabling Logging
+```java
+ToolRegistry registry = new ToolRegistry();
+registry.setAllowDangerousTools(true);   // only with trusted input / sandboxed process
+registry.register(new CommandExecutionTool());
+```
 
-#### Quick Start: Use Built-in LoggingObserver
+### Switch memory backend
+
+```java
+agent.setMemoryFactory(id -> new InMemoryStore());                                          // in-memory (default)
+agent.setMemoryFactory(id -> new RedisMemory("localhost", 6379, "agent:session:" + id, 3600)); // Redis, TTL seconds
+agent.setMemoryFactory(id -> new MySQLMemory(jdbcUrl, "root", "root", "agent_messages", id)); // MySQL (shared pool per url+user)
+```
+
+## Observability
 
 ```java
 import com.agent.core.observer.LoggingObserver;
-
-// Create observer (verbose mode shows full message content)
-LoggingObserver observer = new LoggingObserver(true);
-
-// Attach to components
+LoggingObserver observer = new LoggingObserver(true); // verbose
 llmClient.setObserver(observer);
-toolRegistry.setObserver(observer);
-agent.setObserver(observer);
-
-// Run agent - all events will be logged
-AgentResult result = agent.run("Your task here");
-```
-
-#### Custom Observer Implementation
-
-```java
-import com.agent.core.observer.AgentObserver;
-import com.agent.core.model.LLMResponse;
-import com.agent.core.model.Message;
-import com.agent.core.tool.ToolDefinition;
-import java.util.List;
-
-public class MyObserver implements AgentObserver {
-    @Override
-    public void onLLMCallStart(List<Message> messages, List<ToolDefinition> tools) {
-        System.out.println("LLM call starting with " + messages.size() + " messages");
-    }
-
-    @Override
-    public void onLLMCallEnd(LLMResponse response, long duration) {
-        System.out.println("LLM responded in " + duration + "ms");
-        System.out.println("Tokens used: " + response.totalTokens());
-    }
-
-    @Override
-    public void onToolCallStart(String toolName, String arguments) {
-        System.out.println("Executing tool: " + toolName);
-    }
-
-    @Override
-    public void onToolCallEnd(String toolName, String result, long duration) {
-        System.out.println("Tool " + toolName + " completed in " + duration + "ms");
-    }
-
-    @Override
-    public void onStepStart(int stepNumber, String phase) {
-        System.out.println("Step " + stepNumber + " started (phase: " + phase + ")");
-    }
-
-    @Override
-    public void onStepEnd(int stepNumber, String phase) {
-        System.out.println("Step " + stepNumber + " completed");
-    }
-}
-
-// Use custom observer
-MyObserver observer = new MyObserver();
+registry.setObserver(observer);
 agent.setObserver(observer);
 ```
 
-### Disabling Logging
+Callbacks: `onLLMCallStart/End/Error`, `onToolCallStart/End/Error`, `onStepStart/End` — all with durations; pass `null` to disable.
 
-To disable observability, simply set the observer to `null`:
+## Agent patterns
 
-```java
-// Disable observer on all components
-llmClient.setObserver(null);
-toolRegistry.setObserver(null);
-agent.setObserver(null);
-```
+- **React Agent**: Thought → Action (tool) → Observation, repeated until a final answer. Best for interactive, multi-tool tasks.
+- **Plan-and-Execute Agent**: PLAN → EXECUTE (each step a mini ReAct loop) → REPLAN (bounded, optional) → SYNTHESIZE (LLM produces the final answer). Best for complex multi-step tasks.
 
-### Observer Events
+## Built-in tools & risk levels
 
-The `AgentObserver` interface provides callbacks for:
-
-- **LLM Calls**: `onLLMCallStart`, `onLLMCallEnd`, `onLLMCallError`
-- **Tool Executions**: `onToolCallStart`, `onToolCallEnd`, `onToolCallError`
-- **Agent Steps**: `onStepStart`, `onStepEnd`
-
-All callbacks include timing information (duration in milliseconds) for performance monitoring.
-
-## Agent Patterns
-
-### React Agent
-
-The React (Reasoning + Acting) pattern implements a loop:
-
-1. **Thought**: LLM reasons about the current situation
-2. **Action**: LLM decides to use a tool
-3. **Observation**: Tool result is observed
-4. Repeat until final answer
-
-Best for: Interactive tasks requiring multiple tool calls and iterative reasoning.
-
-### Plan-and-Execute Agent
-
-Two-phase approach:
-
-1. **Planning Phase**: LLM creates a step-by-step plan
-2. **Execution Phase**: Each step is executed sequentially
-3. **Replanning** (optional): Plan can be revised based on results
-
-Best for: Complex, multi-step tasks where upfront planning is beneficial.
-
-## Built-in Tools
-
-- **CalculatorTool**: Evaluates mathematical expressions
-- **DateTimeTool**: Gets current date and time
-- **WebFetchTool**: Fetches content from URLs
+| Tool | Name | Description | Risk |
+| --- | --- | --- | --- |
+| `CalculatorTool` | `calculator` | evaluate a math expression | SAFE |
+| `DateTimeTool` | `get_datetime` | current date/time | SAFE |
+| `WebFetchTool` | `web_fetch` | http(s) fetch via `UrlGuard` (anti-SSRF) | SENSITIVE |
+| `FileReadTool` | `file_read` | read file / line range (sandboxed) | SAFE |
+| `FileListTool` | `file_list` | list directory + glob + depth | SAFE |
+| `FileSearchTool` | `file_search` | grep inside a directory | SAFE |
+| `FileWriteTool` | `file_write` | write a file (sandbox + size cap) | SENSITIVE |
+| `FileEditTool` | `file_edit` | unique-exact-string edit | SENSITIVE |
+| `CommandExecutionTool` | `command_execute` | run a shell command | DANGEROUS (opt-in) |
 
 ## Maintenance
 
-### Adding New LLM Providers
-
-Implement the `LLMClient` interface:
-
-```java
-public class MyLLMClient implements LLMClient {
-    @Override
-    public LLMResponse chat(List<Message> messages, List<ToolDefinition> tools) {
-        // Implement API call to your LLM provider
-    }
-}
-```
-
-### Extending Memory
-
-Implement the `Memory` interface for custom storage:
-
-```java
-public class DatabaseMemory implements Memory {
-    @Override
-    public void add(Message message) {
-        // Store in database
-    }
-    
-    @Override
-    public List<Message> getMessages() {
-        // Retrieve from database
-    }
-    
-    // ... other methods
-}
-```
-
-### Logging
-
-The framework uses SLF4J with Logback. Configure logging in `src/main/resources/logback.xml`.
+- **New LLM provider**: implement `LLMClient`, or reuse `OpenAILLMClient` against an OpenAI-compatible endpoint.
+- **New storage**: extend `AbstractMemory` and implement the five `do*` primitives (`doAdd/doGetMessages/doClear/doSize/doReplaceAll`).
+- **Logging**: SLF4J + Logback, configured in `src/main/resources/logback.xml`.
 
 ## Dependencies
 
-- **OpenAI Java SDK 4.32.0**: Official OpenAI API client
-- **Jackson 2.17.0**: JSON processing
-- **SLF4J 2.0.12**: Logging facade
-- **Logback 1.5.3**: Logging implementation
-- **Jedis 5.1.2**: Redis client
-- **MySQL Connector 8.3.0**: MySQL driver
-- **HikariCP 5.1.0**: Database connection pool
-- **JUnit 5.10.2**: Testing framework
-
+- **OpenAI Java SDK 4.52.0**
+- **Jackson 2.17.0**
+- **SLF4J 2.0.12** / **Logback 1.5.3**
+- **Jedis 5.1.2**
+- **MySQL Connector/J 8.3.0** + **HikariCP 5.1.0**
+- **JUnit 5.10.2**
