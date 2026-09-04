@@ -1,319 +1,272 @@
 package com.agent.core.memory;
 
-import com.agent.core.llm.LLMClient;
 import com.agent.core.model.Message;
-import com.agent.core.model.Role;
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import redis.clients.jedis.Jedis;
 import redis.clients.jedis.JedisPool;
 import redis.clients.jedis.JedisPoolConfig;
+import redis.clients.jedis.Pipeline;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Redis-based implementation of conversation memory.
- * Stores messages in a Redis list with optional TTL.
+ * 基于 Redis 的会话存储，每个会话键对应一个列表，并可设置可选的 TTL。
+ *
+ * <h3>连接池</h3>
+ * <p>通过 host/port 构造时，{@link JedisPool} 会在所有指向同一 Redis 端点的
+ * {@code RedisMemory} 实例之间<b>共享并采用引用计数</b>。此前的行为是每个会话一个连接池——
+ * 1,000 个会话就会打开 1,000 个连接池、多达 10,000 个套接字，没有服务器能承受
+ * （而且永远不会被关闭，因为 {@code RedisMemory} 是由工厂创建的，智能体从未持有它）。
+ *
+ * <p>若传入的是外部创建的 {@link JedisPool}，则本实例<b>不</b>拥有它，
+ * {@link #close()} 也不会去关闭它。
  */
-public class RedisMemory implements Memory, AutoCloseable {
+public class RedisMemory extends AbstractMemory implements AutoCloseable {
 
     private static final Logger log = LoggerFactory.getLogger(RedisMemory.class);
-    private static final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static final Map<String, PoolRef> POOLS = new ConcurrentHashMap<>();
+    private static final Object POOL_LOCK = new Object();
 
     private final JedisPool jedisPool;
     private final String key;
     private final int ttlSeconds;
-    private final long compressionTokenThreshold;
-    private LLMClient compressionLLMClient;
-    private String compressionPrompt;
-
-    // 增量维护的 token 估算值。-1 表示尚未从 Redis 加载（懒初始化，支持应用重启后恢复）
-    private long currentTokens = -1L;
+    private final boolean ownsPool;
+    private final String poolKey;
 
     /**
-     * Create Redis memory with default settings.
+     * 使用默认设置创建 Redis 存储。
      *
-     * @param host Redis host
-     * @param port Redis port
-     * @param key  Redis key for storing messages
+     * @param host Redis 主机地址
+     * @param port Redis 端口
+     * @param key  用于存储消息的 Redis 键
      */
     public RedisMemory(String host, int port, String key) {
         this(host, port, key, 0, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
-     * Create Redis memory with TTL.
+     * 创建带 TTL 的 Redis 存储。
      *
-     * @param host       Redis host
-     * @param port       Redis port
-     * @param key        Redis key for storing messages
-     * @param ttlSeconds TTL in seconds (0 for no expiration)
+     * @param host       Redis 主机地址
+     * @param port       Redis 端口
+     * @param key        用于存储消息的 Redis 键
+     * @param ttlSeconds TTL（秒）；为 0 表示永不过期
      */
     public RedisMemory(String host, int port, String key, int ttlSeconds) {
         this(host, port, key, ttlSeconds, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
-     * Create Redis memory with TTL and compression threshold.
-     *
-     * @param host                      Redis host
-     * @param port                      Redis port
-     * @param key                       Redis key for storing messages
-     * @param ttlSeconds                TTL in seconds (0 for no expiration)
-     * @param compressionTokenThreshold token threshold to trigger compression
+     * 创建带 TTL 与压缩阈值的 Redis 存储。
      */
     public RedisMemory(String host, int port, String key, int ttlSeconds,
                        long compressionTokenThreshold) {
-        JedisPoolConfig config = new JedisPoolConfig();
-        config.setMaxTotal(10);
-        config.setMaxIdle(5);
-        config.setMinIdle(1);
-        config.setTestOnBorrow(true);
-
-        this.jedisPool = new JedisPool(config, host, port);
+        super(compressionTokenThreshold);
+        if (key == null || key.isBlank()) {
+            throw new IllegalArgumentException("Redis key must not be blank");
+        }
+        this.poolKey = host + ":" + port;
+        this.jedisPool = acquirePool(host, port);
+        this.ownsPool = true;
         this.key = key;
-        this.ttlSeconds = ttlSeconds;
-        this.compressionTokenThreshold = compressionTokenThreshold;
-        this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
+        this.ttlSeconds = Math.max(0, ttlSeconds);
     }
 
     /**
-     * Create Redis memory with existing JedisPool.
-     *
-     * @param jedisPool  existing JedisPool
-     * @param key        Redis key for storing messages
-     * @param ttlSeconds TTL in seconds (0 for no expiration)
+     * 使用已有的 {@link JedisPool} 创建 Redis 存储。本实例不拥有该连接池，
+     * {@link #close()} 也不会关闭它。
      */
     public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds) {
         this(jedisPool, key, ttlSeconds, DEFAULT_COMPRESSION_TOKEN_THRESHOLD);
     }
 
     /**
-     * Create Redis memory with existing JedisPool and compression threshold.
-     *
-     * @param jedisPool                 existing JedisPool
-     * @param key                       Redis key for storing messages
-     * @param ttlSeconds                TTL in seconds (0 for no expiration)
-     * @param compressionTokenThreshold token threshold to trigger compression
+     * 使用已有的 {@link JedisPool} 以及指定的压缩阈值创建 Redis 存储。
      */
     public RedisMemory(JedisPool jedisPool, String key, int ttlSeconds,
                        long compressionTokenThreshold) {
+        super(compressionTokenThreshold);
+        if (jedisPool == null) {
+            throw new IllegalArgumentException("JedisPool must not be null");
+        }
+        if (key == null || key.isBlank()) {
+            throw new IllegalArgumentException("Redis key must not be blank");
+        }
         this.jedisPool = jedisPool;
+        this.poolKey = null;
+        this.ownsPool = false;
         this.key = key;
-        this.ttlSeconds = ttlSeconds;
-        this.compressionTokenThreshold = compressionTokenThreshold;
-        this.compressionPrompt = DEFAULT_COMPRESSION_PROMPT;
+        this.ttlSeconds = Math.max(0, ttlSeconds);
+    }
+
+    /**
+     * 本会话对应的 Redis 键。
+     */
+    public String key() {
+        return key;
     }
 
     @Override
-    public void setCompressionLLMClient(LLMClient llmClient) {
-        this.compressionLLMClient = llmClient;
-    }
-
-    @Override
-    public void setCompressionPrompt(String prompt) {
-        this.compressionPrompt = prompt != null ? prompt : DEFAULT_COMPRESSION_PROMPT;
-    }
-
-    @Override
-    public void add(Message message) {
+    protected void doAdd(Message message) {
         try (Jedis jedis = jedisPool.getResource()) {
-            String json = objectMapper.writeValueAsString(message);
-            jedis.rpush(key, json);
-
-            // Set TTL if configured
+            String json = JsonSupport.write(message);
+            Pipeline pipeline = jedis.pipelined();
+            pipeline.rpush(key, json);
             if (ttlSeconds > 0) {
-                jedis.expire(key, ttlSeconds);
+                pipeline.expire(key, ttlSeconds);
             }
-
-            // 增量更新 token 缓存（避免每次 add 都全量拉取消息计算）
-            ensureTokensInitialized();
-            currentTokens += estimateMessageTokens(message);
-
+            pipeline.sync();
             log.debug("Added message to Redis key '{}'", key);
-
-            // Auto compress if needed
-            autoCompressIfNeeded();
-
-        } catch (JsonProcessingException e) {
-            log.error("Failed to serialize message: {}", e.getMessage(), e);
-            throw new RuntimeException("Failed to serialize message", e);
+        } catch (Exception e) {
+            log.error("Failed to add message to Redis key '{}': {}", key, e.getMessage(), e);
+            throw new RuntimeException("Failed to add message to Redis", e);
         }
     }
 
     @Override
-    public List<Message> getMessages() {
+    protected List<Message> doGetMessages() {
+        List<Message> messages = new ArrayList<>();
         try (Jedis jedis = jedisPool.getResource()) {
-            List<String> jsonList = jedis.lrange(key, 0, -1);
-            List<Message> messages = new ArrayList<>();
-
-            for (String json : jsonList) {
+            List<String> serialized = jedis.lrange(key, 0, -1);
+            for (String json : serialized) {
                 try {
-                    Message message = objectMapper.readValue(json, Message.class);
-                    messages.add(message);
-                } catch (JsonProcessingException e) {
-                    log.error("Failed to deserialize message: {}", e.getMessage(), e);
+                    Message message = JsonSupport.read(json);
+                    if (message != null) {
+                        messages.add(message);
+                    }
+                } catch (Exception e) {
+                    // 单条损坏的记录不应导致整个历史记录都无法读取。
+                    log.error("Skipping unreadable message in Redis key '{}': {}", key, e.getMessage());
                 }
             }
-
-            return Collections.unmodifiableList(messages);
+        } catch (RuntimeException e) {
+            log.error("Failed to read messages from Redis key '{}': {}", key, e.getMessage(), e);
+            throw e;
         }
+        return messages;
     }
 
     @Override
-    public void clear() {
+    protected void doClear() {
         try (Jedis jedis = jedisPool.getResource()) {
             jedis.del(key);
-            currentTokens = 0L;
             log.debug("Cleared Redis key '{}'", key);
+        } catch (RuntimeException e) {
+            log.error("Failed to clear Redis key '{}': {}", key, e.getMessage(), e);
+            throw e;
         }
     }
 
     @Override
-    public int size() {
+    protected int doSize() {
         try (Jedis jedis = jedisPool.getResource()) {
             return Math.toIntExact(jedis.llen(key));
+        } catch (RuntimeException e) {
+            log.error("Failed to count messages in Redis key '{}': {}", key, e.getMessage(), e);
+            throw e;
         }
     }
 
+    /**
+     * 在一次流水线往返中整体替换历史，使并发读取者要么看到旧历史、要么看到新历史，
+     * 绝不会看到两者的混合片段。
+     */
     @Override
-    public long estimateTokens() {
-        ensureTokensInitialized();
-        return currentTokens;
-    }
-
-    @Override
-    public boolean compress() {
-        if (compressionLLMClient == null) {
-            log.warn("Compression LLM client not set, cannot compress");
-            return false;
-        }
-
-        List<Message> messages = getMessages();
-        if (messages.isEmpty()) {
-            return false;
-        }
-
-        // Separate system messages and conversation messages
-        List<Message> systemMessages = new ArrayList<>();
-        List<Message> conversationMessages = new ArrayList<>();
-
-        for (Message msg : messages) {
-            if (msg.role() == Role.SYSTEM) {
-                systemMessages.add(msg);
-            } else {
-                conversationMessages.add(msg);
+    protected void doReplaceAll(List<Message> replacement) {
+        try (Jedis jedis = jedisPool.getResource()) {
+            List<String> serialized = new ArrayList<>(replacement.size());
+            for (Message message : replacement) {
+                serialized.add(JsonSupport.write(message));
             }
-        }
 
-        if (conversationMessages.isEmpty()) {
-            return false;
-        }
-
-        // Build conversation text for compression
-        StringBuilder conversationText = new StringBuilder();
-        for (Message msg : conversationMessages) {
-            String roleStr = msg.role().getValue();
-            String content = msg.content() != null ? msg.content() : "";
-            conversationText.append(roleStr).append(": ").append(content).append("\n");
-        }
-
-        // Call LLM to compress
-        String prompt = compressionPrompt.replace("{conversation}", conversationText.toString());
-        List<Message> compressMessages = new ArrayList<>();
-        compressMessages.add(Message.system("You are a helpful assistant that compresses conversations."));
-        compressMessages.add(Message.user(prompt));
-
-        try {
-            var response = compressionLLMClient.chat(compressMessages);
-            String summary = response.content();
-
-            if (summary != null && !summary.isBlank()) {
-                // Clear and rebuild with compressed summary
-                clear();
-                try (Jedis jedis = jedisPool.getResource()) {
-                    // Re-add system messages
-                    for (Message sysMsg : systemMessages) {
-                        String json = objectMapper.writeValueAsString(sysMsg);
-                        jedis.rpush(key, json);
-                    }
-                    // Add compressed summary
-                    Message summaryMsg = Message.system("[对话摘要]\n" + summary);
-                    String json = objectMapper.writeValueAsString(summaryMsg);
-                    jedis.rpush(key, json);
-
-                    // Set TTL if configured
-                    if (ttlSeconds > 0) {
-                        jedis.expire(key, ttlSeconds);
-                    }
-                }
-                // 压缩后消息列表已重建，重置缓存以触发下次懒加载
-                currentTokens = -1L;
-                log.info("Successfully compressed conversation in Redis");
-                return true;
+            Pipeline pipeline = jedis.pipelined();
+            pipeline.del(key);
+            for (String json : serialized) {
+                pipeline.rpush(key, json);
             }
+            if (ttlSeconds > 0) {
+                pipeline.expire(key, ttlSeconds);
+            }
+            pipeline.sync();
         } catch (Exception e) {
-            log.error("Failed to compress conversation: {}", e.getMessage(), e);
-        }
-
-        return false;
-    }
-
-    private void autoCompressIfNeeded() {
-        if (compressionLLMClient == null || compressionTokenThreshold <= 0) {
-            return;
-        }
-
-        ensureTokensInitialized();
-        if (currentTokens >= compressionTokenThreshold) {
-            log.info("Token count {} exceeds threshold {}, triggering compression",
-                    currentTokens, compressionTokenThreshold);
-            compress();
+            log.error("Failed to replace messages in Redis key '{}': {}", key, e.getMessage(), e);
+            throw new RuntimeException("Failed to replace messages in Redis", e);
         }
     }
 
     /**
-     * 懒初始化 token 缓存。仅在首次访问时从 Redis 全量加载，之后增量维护。
-     * 支持应用重启后从持久化存储恢复 token 计数。
+     * 若本实例持有共享连接池的引用，则释放该引用。外部传入的连接池绝不会在此关闭。
      */
-    private void ensureTokensInitialized() {
-        if (currentTokens >= 0) {
-            return;
-        }
-        long total = 0;
-        for (Message msg : getMessages()) {
-            total += estimateMessageTokens(msg);
-        }
-        currentTokens = total;
-    }
-
-    private long estimateMessageTokens(Message message) {
-        String content = message.content();
-        if (content == null || content.isEmpty()) {
-            return 0;
-        }
-
-        // Count Chinese characters
-        long chineseChars = content.chars()
-                .filter(c -> Character.UnicodeScript.of(c) == Character.UnicodeScript.HAN)
-                .count();
-        long otherChars = content.length() - chineseChars;
-
-        // Chinese: ~1.5 tokens per char, English: ~0.25 tokens per char
-        return (long) (chineseChars * 1.5 + otherChars * 0.25);
-    }
-
-    /**
-     * Close the JedisPool when done.
-     */
+    @Override
     public void close() {
-        if (jedisPool != null && !jedisPool.isClosed()) {
-            jedisPool.close();
-            log.info("Closed Redis connection pool");
+        if (ownsPool && poolKey != null) {
+            releasePool(poolKey);
+        }
+    }
+
+    private static JedisPool acquirePool(String host, int port) {
+        synchronized (POOL_LOCK) {
+            PoolRef reference = POOLS.get(poolKeyFor(host, port));
+            if (reference == null) {
+                reference = new PoolRef(newPool(host, port));
+                POOLS.put(poolKeyFor(host, port), reference);
+            }
+            reference.references++;
+            return reference.pool;
+        }
+    }
+
+    private static void releasePool(String poolKey) {
+        synchronized (POOL_LOCK) {
+            PoolRef reference = POOLS.get(poolKey);
+            if (reference == null) {
+                return;
+            }
+            reference.references--;
+            if (reference.references <= 0) {
+                POOLS.remove(poolKey);
+                closeQuietly(reference.pool);
+            }
+        }
+    }
+
+    private static JedisPool newPool(String host, int port) {
+        JedisPoolConfig config = new JedisPoolConfig();
+        config.setMaxTotal(32);
+        config.setMaxIdle(8);
+        config.setMinIdle(1);
+        config.setTestOnBorrow(true);
+        config.setBlockWhenExhausted(true);
+        log.info("Creating shared Redis pool for {}:{}", host, port);
+        return new JedisPool(config, host, port);
+    }
+
+    private static void closeQuietly(JedisPool pool) {
+        try {
+            if (!pool.isClosed()) {
+                pool.close();
+                log.info("Closed shared Redis pool");
+            }
+        } catch (RuntimeException e) {
+            log.warn("Failed to close Redis pool: {}", e.getMessage());
+        }
+    }
+
+    private static String poolKeyFor(String host, int port) {
+        return host + ":" + port;
+    }
+
+    private static final class PoolRef {
+        private final JedisPool pool;
+        private int references;
+
+        private PoolRef(JedisPool pool) {
+            this.pool = pool;
         }
     }
 }

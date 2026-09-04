@@ -3,13 +3,13 @@ package com.agent.core.model;
 import java.util.List;
 
 /**
- * Response from the LLM containing the assistant message and full response metadata.
+ * 来自 LLM 的响应，包含助手消息及完整的响应元数据。
  *
- * @param message      the assistant's response message
- * @param id           provider-assigned response id (null when unavailable)
- * @param model        the model that actually produced the response (null when unavailable)
- * @param finishReason why generation stopped, e.g. "stop", "tool_calls", "length" (null when unavailable)
- * @param usage        token usage statistics, {@link TokenUsage#NONE} when the provider returned none
+ * @param message     助手的响应消息
+ * @param id          服务商分配的响应 ID（不可用时为 null）
+ * @param model       实际生成该响应的模型（不可用时为 null）
+ * @param finishReason 生成停止的原因，例如 "stop"、"tool_calls"、"length"（不可用时为 null）
+ * @param usage       令牌用量统计；当服务商未返回时为 {@link TokenUsage#NONE}
  */
 public record LLMResponse(
         Message message,
@@ -24,7 +24,7 @@ public record LLMResponse(
     }
 
     /**
-     * Create a response without provider metadata (usage defaults to {@link TokenUsage#NONE}).
+     * 创建不含服务商元数据的响应（用量默认为 {@link TokenUsage#NONE}）。
      */
     public LLMResponse(Message message) {
         this(message, null, null, null, TokenUsage.NONE);

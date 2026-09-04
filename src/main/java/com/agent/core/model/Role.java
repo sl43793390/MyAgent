@@ -1,7 +1,7 @@
 package com.agent.core.model;
 
 /**
- * Enumeration of message roles in a conversation.
+ * 对话中消息角色（role）的枚举。
  */
 public enum Role {
     SYSTEM("system"),

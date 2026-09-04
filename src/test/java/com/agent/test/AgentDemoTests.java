@@ -15,10 +15,10 @@ import com.agent.core.tool.annotation.Tool;
 import com.agent.core.tool.annotation.ToolParam;
 
 /**
- * Demo tests showing how to use the Java Agent Framework.
+ * 演示测试：展示如何使用该 Java 智能体框架。
  *
- * These are example methods demonstrating various agent patterns.
- * To run these demos, set the OPENAI_API_KEY environment variable.
+ * 以下方法均为示例，演示各种智能体模式。
+ * 运行这些演示前，请设置环境变量 OPENAI_API_KEY。
  */
 public class AgentDemoTests {
 
@@ -26,12 +26,12 @@ public class AgentDemoTests {
     private static final String BASE_URL = System.getenv("BASE_URL");
 
     /**
-     * Demo 1: Basic React Agent with built-in tools.
+     * 演示 1：使用内置工具的基础 React 智能体。
      *
-     * Shows how to:
-     * - Create an OpenAI client
-     * - Register built-in tools
-     * - Run a React Agent 需要带有记忆的agent，必须传入用户ID，支持多轮对话，【单轮对话则不需要传入】
+     * 演示内容包括：
+     * - 创建 OpenAI 客户端
+     * - 注册内置工具
+     * - 运行需要记忆的 React 智能体：必须传入用户ID，支持多轮对话（单轮对话则不需要传入）
      */
     public static void testReactAgentWithBuiltinTools() {
         if (API_KEY == null || API_KEY.isBlank()) {
@@ -39,11 +39,14 @@ public class AgentDemoTests {
             return;
         }
 
-        // Create LLM client
+        // 创建 LLM 客户端
         var llmClient = OpenAILLMClient.openAI(API_KEY, BASE_URL, "glm-5.3-flash");
 
-        // Register tools
+        // 注册工具
         ToolRegistry registry = new ToolRegistry();
+        // CommandExecutionTool 具有危险性（可执行任意 shell 命令）：注册表要求显式开启（opt-in）。
+        // 仅当智能体输入可信且进程已处于沙箱环境时，才应启用此项。
+        registry.setAllowDangerousTools(true);
         registry.register(new CommandExecutionTool());
         registry.register(new DateTimeTool());
         registry.register(new FileEditTool());
@@ -56,7 +59,7 @@ public class AgentDemoTests {
         // 附加到组件
         llmClient.setObserver(observer);
         registry.setObserver(observer);
-        // Create and run agent
+        // 创建并运行智能体
         String sessionId = "user-123";
         ReactAgent agent = new ReactAgent(llmClient, registry, 10);
         agent.setObserver(observer);
@@ -66,7 +69,7 @@ public class AgentDemoTests {
 //                    "chat_memory",id,100000);
 //        });
 //        AgentResult result = agent.run("Calculate (15 + 27) * 3 and tell me the current time", sessionId);
-        AgentResult result = agent.run("写一首七言绝句，主题是春天，要立意深远，不能浅显，最后保存到项目根目录下的markdown格式文档中", sessionId);
+        AgentResult result = agent.run("今天几号了", sessionId);
 
         System.out.println("=== React Agent Result ===");
         System.out.println("Output: " + result.output());
@@ -81,12 +84,12 @@ public class AgentDemoTests {
     }
 
     /**
-     * Demo 2: React Agent with custom annotated tools.
+     * 演示 2：使用自定义注解工具的 React 智能体。
      *
-     * Shows how to:
-     * - Create custom tools using @Tool annotation
-     * - Register them with AnnotationToolProcessor
-     * - Use them in a React Agent
+     * 演示内容包括：
+     * - 使用 @Tool 注解创建自定义工具
+     * - 通过 AnnotationToolProcessor 注册工具
+     * - 在 React 智能体中使用这些工具
      */
     public static void testReactAgentWithCustomTools() {
         if (API_KEY == null || API_KEY.isBlank()) {
@@ -94,10 +97,10 @@ public class AgentDemoTests {
             return;
         }
 
-        // Create LLM client
+        // 创建 LLM 客户端
         var llmClient = OpenAILLMClient.openAI(API_KEY, BASE_URL, "glm-5.3-flash");
 
-        // Create tool registry and processor
+        // 创建工具注册表与处理器
         ToolRegistry registry = new ToolRegistry();
         AnnotationToolProcessor processor = new AnnotationToolProcessor(registry);
 
@@ -106,10 +109,10 @@ public class AgentDemoTests {
         // 附加到组件
         llmClient.setObserver(observer);
         registry.setObserver(observer);
-        // Register custom tool
+        // 注册自定义工具
 //        processor.register(new WeatherTools());
 
-        // Create and run agent
+        // 创建并运行智能体
         ReactAgent agent = new ReactAgent(llmClient, registry, 10);
         AgentResult result = agent.run("北京天气怎么样？我是否应该带雨伞？");
 
@@ -118,11 +121,11 @@ public class AgentDemoTests {
     }
 
     /**
-     * Demo 3: Plan-and-Execute Agent.
+     * 演示 3：Plan-and-Execute（规划-执行）型智能体。
      *
-     * Shows how to:
-     * - Create a Plan-and-Execute Agent
-     * - Use it for complex multi-step tasks
+     * 演示内容包括：
+     * - 创建 Plan-and-Execute 智能体
+     * - 将其用于复杂的多步骤任务
      */
     public static void testPlanAndExecuteAgent() {
         if (API_KEY == null || API_KEY.isBlank()) {
@@ -130,14 +133,14 @@ public class AgentDemoTests {
             return;
         }
 
-        // Create LLM client
+        // 创建 LLM 客户端
         var llmClient = OpenAILLMClient.openAI(API_KEY, BASE_URL, "glm-5.3-flash");
 
-        // Register tools
+        // 注册工具
         ToolRegistry registry = new ToolRegistry();
         registry.register(new CalculatorTool());
 
-        // Create agent with replanning enabled
+        // 创建启用重新规划的智能体
         PlanAndExecuteAgent agent = new PlanAndExecuteAgent(
                 llmClient,
                 registry,
@@ -148,7 +151,7 @@ public class AgentDemoTests {
         registry.setObserver(observer);
         agent.setObserver(observer);
         llmClient.setObserver(observer);
-        // Run complex task
+        // 运行复杂任务
         AgentResult result = agent.run(
                 "计算1000美元以年利率5%计息3年的复利总额。\n" +
                         "然后计算该金额折合人民币的具体数额（假设1美元=7.2元人民币）。"
@@ -160,11 +163,11 @@ public class AgentDemoTests {
     }
 
     /**
-     * Demo 4: Multiple custom tools working together.
+     * 演示 4：多个自定义工具协同工作。
      *
-     * Shows how to:
-     * - Register multiple custom tool classes
-     * - Combine built-in and custom tools
+     * 演示内容包括：
+     * - 注册多个自定义工具类
+     * - 组合使用内置工具与自定义工具
      */
     public static void testMultipleCustomTools() {
         if (API_KEY == null || API_KEY.isBlank()) {
@@ -177,7 +180,7 @@ public class AgentDemoTests {
         ToolRegistry registry = new ToolRegistry();
         AnnotationToolProcessor processor = new AnnotationToolProcessor(registry);
 
-        // Register multiple custom tools
+        // 注册多个自定义工具
         processor.register(new WeatherTools());
         processor.register(new CurrencyTools());
         registry.register(new CalculatorTool());
@@ -199,7 +202,7 @@ public class AgentDemoTests {
     }
 
     /**
-     * Main method to run all demos.
+     * 主方法：运行全部演示。
      */
     public static void main(String[] args) {
 //        System.out.println("Starting Agent Demo Tests...\n");
@@ -223,7 +226,3 @@ public class AgentDemoTests {
         System.out.println("All demos completed!");
     }
 }
-
-
-
-

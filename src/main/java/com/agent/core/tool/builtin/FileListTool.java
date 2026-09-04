@@ -1,7 +1,9 @@
 package com.agent.core.tool.builtin;
 
+import com.agent.core.tool.RiskLevel;
 import com.agent.core.tool.Tool;
 import com.agent.core.tool.ToolDefinition;
+import com.agent.core.tool.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,8 +18,8 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * Built-in tool for listing files and directories,
- * with optional glob pattern filtering and recursive traversal.
+ * 用于列出文件和目录的内置工具，
+ * 支持可选的通配符（Glob）模式过滤与递归遍历。
  */
 public class FileListTool implements Tool {
 
@@ -57,10 +59,10 @@ public class FileListTool implements Tool {
     }
 
     @Override
-    public String execute(Map<String, Object> arguments) {
+    public ToolResult execute(Map<String, Object> arguments) {
         String pathStr = getStringArg(arguments, "path");
         if (pathStr == null || pathStr.isBlank()) {
-            return "Error: 'path' parameter is required";
+            return ToolResult.retryable("Error: 'path' parameter is required");
         }
 
         String pattern = getStringArg(arguments, "pattern");
@@ -68,7 +70,7 @@ public class FileListTool implements Tool {
 
         Path dir = Path.of(pathStr);
         if (!Files.isDirectory(dir)) {
-            return "Error: not a directory: " + pathStr;
+            return ToolResult.failure("Error: not a directory: " + pathStr);
         }
 
         PathMatcher matcher = (pattern == null || pattern.isBlank())
@@ -96,11 +98,12 @@ public class FileListTool implements Tool {
             }
         } catch (IOException e) {
             log.error("Failed to list directory '{}': {}", pathStr, e.getMessage());
-            return "Error listing directory: " + e.getMessage();
+            return ToolResult.failure("Error listing directory: " + e.getMessage());
         }
 
         if (entries.isEmpty()) {
-            return "No entries found" + (matcher != null ? " matching pattern '" + pattern + "'" : "") + " in " + pathStr;
+            return ToolResult.success("No entries found"
+                    + (matcher != null ? " matching pattern '" + pattern + "'" : "") + " in " + pathStr);
         }
 
         StringBuilder sb = new StringBuilder();
@@ -112,7 +115,12 @@ public class FileListTool implements Tool {
         }
 
         log.debug("Listed {} entries in {}", entries.size(), pathStr);
-        return sb.toString();
+        return ToolResult.success(sb.toString());
+    }
+
+    @Override
+    public RiskLevel riskLevel() {
+        return RiskLevel.SAFE;
     }
 
     private String describe(Path path) {

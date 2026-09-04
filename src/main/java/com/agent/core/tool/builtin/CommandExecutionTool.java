@@ -1,7 +1,9 @@
 package com.agent.core.tool.builtin;
 
+import com.agent.core.tool.RiskLevel;
 import com.agent.core.tool.Tool;
 import com.agent.core.tool.ToolDefinition;
+import com.agent.core.tool.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -12,13 +14,14 @@ import java.io.InputStreamReader;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Built-in tool for executing shell/system commands and capturing their output.
- * Uses cmd.exe on Windows and /bin/sh on Unix-like systems.
+ * 用于执行 shell/系统命令并捕获其输出的内置工具。
+ * Windows 上使用 cmd.exe，类 Unix 系统上使用 /bin/sh。
  */
 public class CommandExecutionTool implements Tool {
 
@@ -60,10 +63,10 @@ public class CommandExecutionTool implements Tool {
     }
 
     @Override
-    public String execute(Map<String, Object> arguments) {
+    public ToolResult execute(Map<String, Object> arguments) {
         String command = getStringArg(arguments, "command");
         if (command == null || command.isBlank()) {
-            return "Error: 'command' parameter is required";
+            return ToolResult.retryable("Error: 'command' parameter is required");
         }
 
         String workingDirStr = getStringArg(arguments, "working_dir");
@@ -79,7 +82,7 @@ public class CommandExecutionTool implements Tool {
         if (workingDirStr != null && !workingDirStr.isBlank()) {
             Path workingDir = Path.of(workingDirStr);
             if (!Files.isDirectory(workingDir)) {
-                return "Error: working directory does not exist: " + workingDirStr;
+                return ToolResult.failure("Error: working directory does not exist: " + workingDirStr);
             }
             processBuilder.directory(workingDir.toFile());
         }
@@ -89,7 +92,7 @@ public class CommandExecutionTool implements Tool {
             process = processBuilder.start();
         } catch (IOException e) {
             log.error("Failed to start command '{}': {}", command, e.getMessage());
-            return "Error starting command: " + e.getMessage();
+            return ToolResult.failure("Error starting command: " + e.getMessage());
         }
 
         StringBuilder stdout = new StringBuilder();
@@ -105,7 +108,7 @@ public class CommandExecutionTool implements Tool {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             process.destroyForcibly();
-            return "Error: command execution interrupted";
+            return ToolResult.retryable("Error: command execution interrupted");
         }
 
         if (!finished) {
@@ -113,8 +116,8 @@ public class CommandExecutionTool implements Tool {
             joinQuietly(outThread);
             joinQuietly(errThread);
             log.warn("Command '{}' timed out after {} seconds", command, timeoutSeconds);
-            return "Error: command timed out after " + timeoutSeconds + " seconds\n"
-                    + "--- partial stdout ---\n" + truncate(stdout.toString());
+            return ToolResult.retryable("Error: command timed out after " + timeoutSeconds + " seconds\n"
+                    + "--- partial stdout ---\n" + truncate(stdout.toString()));
         }
 
         joinQuietly(outThread);
@@ -131,7 +134,9 @@ public class CommandExecutionTool implements Tool {
         }
 
         log.debug("Command '{}' finished with exit code {}", command, exitCode);
-        return result.toString();
+        return exitCode == 0
+                ? ToolResult.success(result.toString())
+                : ToolResult.failure(result.toString());
     }
 
     private void readStream(InputStream inputStream, StringBuilder target) {
@@ -142,7 +147,7 @@ public class CommandExecutionTool implements Tool {
                 target.append(line).append("\n");
             }
         } catch (IOException e) {
-            // Stream closed when process is destroyed; ignore
+            // 进程被销毁时流会关闭，忽略即可
         }
     }
 
@@ -178,5 +183,19 @@ public class CommandExecutionTool implements Tool {
         } catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    @Override
+    public RiskLevel riskLevel() {
+        // 执行任意 shell 命令本质上就是远程代码执行：除非应用显式开启，否则注册中心
+        // 拒绝注册此工具。
+        return RiskLevel.DANGEROUS;
+    }
+
+    @Override
+    public Duration timeout() {
+        // 工具会对每次运行做内部超时限制（默认 60 秒，最长 300 秒）；注册中心层面的
+        // 超时上限应与该上限保持一致，以免长时间运行的命令被过早中断。
+        return Duration.ofSeconds(MAX_TIMEOUT_SECONDS);
     }
 }

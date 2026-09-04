@@ -1,11 +1,11 @@
 package com.agent.core.model;
 
 /**
- * Represents a tool call requested by the LLM.
+ * 表示 LLM 请求的一次工具调用。
  *
- * @param id       unique identifier for this tool call
- * @param name     name of the tool to invoke
- * @param arguments JSON string of arguments to pass to the tool
+ * @param id        本次工具调用的唯一标识
+ * @param name      要调用的工具名称
+ * @param arguments 传给工具的参数（JSON 字符串）
  */
 public record ToolCall(
         String id,

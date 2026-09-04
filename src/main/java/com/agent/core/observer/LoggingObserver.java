@@ -14,20 +14,20 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Collectors;
 
 /**
- * A default observer implementation that logs all events using SLF4J.
+ * 使用 SLF4J 记录全部事件的默认观察者实现。
  *
- * <p>Logging strategy:
+ * <p>日志策略：
  * <ul>
- *   <li>Concise one-line summaries for every lifecycle event are logged at INFO.</li>
- *   <li>Full message content, tool arguments and tool results are logged at DEBUG
- *       when {@code verbose} is enabled (requires DEBUG level on this logger).</li>
- *   <li>Errors are logged with the full stack trace.</li>
- *   <li>Agent step events include the step duration measured by this observer,
- *       so {@link AgentObserver} implementations don't need to change to get timing.</li>
+ *   <li>每个生命周期事件都以简洁的单行摘要记录在 INFO 级别。</li>
+ *   <li>当开启 {@code verbose} 时，完整的消息内容、工具参数与工具结果记录在
+ *       DEBUG 级别（需要将该 logger 的级别设为 DEBUG）。</li>
+ *   <li>错误会连同完整堆栈信息一起记录。</li>
+ *   <li>智能体步骤事件会包含本观察者测得的步骤耗时，
+ *       因此 {@link AgentObserver} 的实现无需改动即可获得耗时数据。</li>
  * </ul>
  *
- * <p>This class is thread-safe: step timings are tracked per thread, so concurrent
- * agent runs on the same observer instance do not interfere.
+ * <p>本类线程安全：步骤计时按线程分别记录，因此同一观察者实例上并发运行的
+ * 多个智能体互不干扰。
  */
 public class LoggingObserver implements AgentObserver {
 
@@ -38,20 +38,20 @@ public class LoggingObserver implements AgentObserver {
 
     private final boolean verbose;
 
-    /** (threadId, phase, step) -> nanoTime when the step started; enables step duration logging. */
+    /** (线程 ID, 阶段, 步骤) -> 步骤开始时的 nanoTime；用于记录步骤耗时。 */
     private final Map<String, Long> stepStartTimes = new ConcurrentHashMap<>();
 
     /**
-     * Create a logging observer.
+     * 创建一个日志观察者。
      *
-     * @param verbose if true, also log message content, tool arguments and results at DEBUG level
+     * @param verbose 若为真，还会在 DEBUG 级别记录消息内容、工具参数与结果
      */
     public LoggingObserver(boolean verbose) {
         this.verbose = verbose;
     }
 
     /**
-     * Create a non-verbose logging observer.
+     * 创建一个非详细模式的日志观察者。
      */
     public LoggingObserver() {
         this(false);

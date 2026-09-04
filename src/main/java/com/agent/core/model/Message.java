@@ -3,13 +3,13 @@ package com.agent.core.model;
 import java.util.List;
 
 /**
- * Represents a message in a conversation with the LLM.
+ * 表示与 LLM 对话中的一条消息。
  *
- * @param role       the role of the message sender
- * @param content    the text content of the message
- * @param toolCallId the tool call ID (for tool role messages)
- * @param name       the tool name (for tool role messages)
- * @param toolCalls  list of tool calls requested by the assistant
+ * @param role       消息发送者的角色
+ * @param content    消息的文本内容
+ * @param toolCallId 工具调用 ID（用于 tool 角色的消息）
+ * @param name       工具名称（用于 tool 角色的消息）
+ * @param toolCalls  助手请求的工具调用列表
  */
 public record Message(
         Role role,

@@ -1,7 +1,9 @@
 package com.agent.core.tool.builtin;
 
+import com.agent.core.tool.RiskLevel;
 import com.agent.core.tool.Tool;
 import com.agent.core.tool.ToolDefinition;
+import com.agent.core.tool.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -16,14 +18,14 @@ import java.util.Map;
 import java.util.stream.Stream;
 
 /**
- * Built-in tool for searching a text query inside the files of a directory (grep-like).
+ * 用于在目录文件中搜索文本查询的内置工具（类似 grep）。
  */
 public class FileSearchTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(FileSearchTool.class);
 
     private static final int MAX_RESULTS = 100;
-    private static final long MAX_FILE_SIZE = 2 * 1024 * 1024; // skip files larger than 2 MB
+    private static final long MAX_FILE_SIZE = 2 * 1024 * 1024; // 跳过大于 2 MB 的文件
     private static final int MAX_DEPTH = 10;
 
     @Override
@@ -58,22 +60,22 @@ public class FileSearchTool implements Tool {
     }
 
     @Override
-    public String execute(Map<String, Object> arguments) {
+    public ToolResult execute(Map<String, Object> arguments) {
         String pathStr = getStringArg(arguments, "path");
         if (pathStr == null || pathStr.isBlank()) {
-            return "Error: 'path' parameter is required";
+            return ToolResult.retryable("Error: 'path' parameter is required");
         }
 
         String query = getStringArg(arguments, "query");
         if (query == null || query.isEmpty()) {
-            return "Error: 'query' parameter is required and must not be empty";
+            return ToolResult.retryable("Error: 'query' parameter is required and must not be empty");
         }
 
         boolean caseSensitive = getBoolArg(arguments.get("case_sensitive"), false);
 
         Path root = Path.of(pathStr);
         if (!Files.exists(root)) {
-            return "Error: path does not exist: " + pathStr;
+            return ToolResult.failure("Error: path does not exist: " + pathStr);
         }
 
         String searchTarget = caseSensitive ? query : query.toLowerCase(Locale.ROOT);
@@ -104,16 +106,16 @@ public class FileSearchTool implements Tool {
                         }
                     }
                 } catch (IOException e) {
-                    // Skip unreadable or non-text files
+                    // 跳过不可读或非文本的文件
                 }
             }
         } catch (IOException e) {
             log.error("Failed to search in '{}': {}", pathStr, e.getMessage());
-            return "Error searching files: " + e.getMessage();
+            return ToolResult.failure("Error searching files: " + e.getMessage());
         }
 
         if (results.isEmpty()) {
-            return "No matches found for '" + query + "' in " + pathStr;
+            return ToolResult.success("No matches found for '" + query + "' in " + pathStr);
         }
 
         StringBuilder sb = new StringBuilder();
@@ -126,7 +128,12 @@ public class FileSearchTool implements Tool {
         }
 
         log.debug("Found {} matches for '{}' in {}", totalMatches, query, pathStr);
-        return sb.toString();
+        return ToolResult.success(sb.toString());
+    }
+
+    @Override
+    public RiskLevel riskLevel() {
+        return RiskLevel.SAFE;
     }
 
     private String getStringArg(Map<String, Object> arguments, String name) {

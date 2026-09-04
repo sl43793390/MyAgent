@@ -3,11 +3,11 @@ package com.agent.core.tool;
 import java.util.Map;
 
 /**
- * Definition of a tool that can be used by the LLM.
+ * 可供 LLM 调用的工具的定义。
  *
- * @param name        unique name of the tool
- * @param description human-readable description of what the tool does
- * @param parameters  JSON Schema describing the tool's parameters
+ * @param name        工具的唯一名称
+ * @param description 对工具功能的可读描述
+ * @param parameters  描述工具参数的 JSON Schema
  */
 public record ToolDefinition(
         String name,
@@ -16,7 +16,7 @@ public record ToolDefinition(
 ) {
 
     /**
-     * Create a simple tool definition with a single string parameter.
+     * 创建一个带单个字符串参数的简单工具定义。
      */
     public static ToolDefinition simple(String name, String description, String parameterName, String parameterDescription) {
         Map<String, Object> properties = Map.of(
@@ -36,7 +36,7 @@ public record ToolDefinition(
     }
 
     /**
-     * Create a tool definition with no parameters.
+     * 创建一个不带参数的工具定义。
      */
     public static ToolDefinition noArgs(String name, String description) {
         Map<String, Object> parameters = Map.of(

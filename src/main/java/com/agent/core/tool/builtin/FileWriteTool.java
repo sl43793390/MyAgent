@@ -1,7 +1,10 @@
 package com.agent.core.tool.builtin;
 
+import com.agent.core.security.PathSandbox;
+import com.agent.core.tool.RiskLevel;
 import com.agent.core.tool.Tool;
 import com.agent.core.tool.ToolDefinition;
+import com.agent.core.tool.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -13,12 +16,36 @@ import java.nio.file.StandardOpenOption;
 import java.util.Map;
 
 /**
- * Built-in tool for writing content to a file.
- * Parent directories are created automatically if they do not exist.
+ * 将文本写入文件，并自动创建缺失的父目录。
+ *
+ * <p>这是文件类工具中最危险的一个：它能把「读错文件」升级为「植入后门」。这里有两道防护至关重要，
+ * 而之前两者都缺失：
+ * <ul>
+ *   <li><b>{@link PathSandbox}</b> — 目标路径必须位于允许的根目录之内。此前该工具会为<i>任意</i>路径
+ *       自动创建父目录，因此 {@code ~/.ssh/authorized_keys} 曾是一个完全合法的写入目标。</li>
+ *   <li><b>大小上限</b> — 写入内容来自模型，因此无限制的写入就等于无限制的磁盘填充。</li>
+ * </ul>
  */
 public class FileWriteTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(FileWriteTool.class);
+
+    /** 防止模型（或提示词注入）在一次调用中把磁盘写满。 */
+    private static final int MAX_CONTENT_CHARS = 1_000_000;
+
+    private final PathSandbox sandbox;
+
+    /** 在进程当前工作目录范围内写入文件。 */
+    public FileWriteTool() {
+        this(PathSandbox.currentDirectory());
+    }
+
+    /**
+     * @param sandbox 本工具允许写入的目录边界
+     */
+    public FileWriteTool(PathSandbox sandbox) {
+        this.sandbox = sandbox != null ? sandbox : PathSandbox.currentDirectory();
+    }
 
     @Override
     public ToolDefinition getDefinition() {
@@ -53,53 +80,62 @@ public class FileWriteTool implements Tool {
     }
 
     @Override
-    public String execute(Map<String, Object> arguments) {
-        String pathStr = getStringArg(arguments, "path");
-        if (pathStr == null || pathStr.isBlank()) {
-            return "Error: 'path' parameter is required";
+    public ToolResult execute(Map<String, Object> arguments) {
+        Path path;
+        try {
+            path = Args.path(sandbox, arguments, "path");
+        } catch (SecurityException e) {
+            log.warn("Rejected file_write: {}", e.getMessage());
+            return ToolResult.failure(e.getMessage());
         }
 
-        Object contentObj = arguments.get("content");
-        String content = contentObj != null ? contentObj.toString() : null;
+        String content = Args.string(arguments, "content");
         if (content == null) {
-            return "Error: 'content' parameter is required";
+            return ToolResult.retryable("Error: 'content' parameter is required");
+        }
+        if (content.length() > MAX_CONTENT_CHARS) {
+            return ToolResult.failure("Error: content is too large (" + content.length()
+                    + " chars, limit is " + MAX_CONTENT_CHARS + "). Write it in smaller parts.");
         }
 
-        boolean append = getBoolArg(arguments.get("append"), false);
+        boolean append = Args.bool(arguments, "append", false);
 
         try {
-            Path path = Path.of(pathStr);
-            if (path.getParent() != null) {
-                Files.createDirectories(path.getParent());
+            if (Files.isDirectory(path)) {
+                return ToolResult.failure("Error: path is a directory, not a file: " + path);
+            }
+            Path parent = path.getParent();
+            if (parent != null) {
+                Files.createDirectories(parent);
             }
 
             if (append) {
                 Files.writeString(path, content, StandardCharsets.UTF_8,
                         StandardOpenOption.CREATE, StandardOpenOption.APPEND);
             } else {
-                Files.writeString(path, content, StandardCharsets.UTF_8);
+                Files.writeString(path, content, StandardCharsets.UTF_8,
+                        StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             }
 
-            log.debug("Wrote {} characters to {} (append={})", content.length(), pathStr, append);
-            return "Successfully wrote " + content.length() + " characters to " + pathStr;
+            log.info("Wrote {} character(s) to {} (append={})", content.length(), path, append);
+            return ToolResult.success("Successfully wrote " + content.length()
+                    + " characters to " + path);
+
         } catch (IOException e) {
-            log.error("Failed to write file '{}': {}", pathStr, e.getMessage());
-            return "Error writing file: " + e.getMessage();
+            log.error("Failed to write '{}': {}", path, e.getMessage());
+            return ToolResult.failure("Error writing file: " + e.getMessage());
         }
     }
 
-    private String getStringArg(Map<String, Object> arguments, String name) {
-        Object value = arguments.get(name);
-        return value != null ? value.toString() : null;
+    @Override
+    public RiskLevel riskLevel() {
+        return RiskLevel.SENSITIVE;
     }
 
-    private boolean getBoolArg(Object value, boolean defaultValue) {
-        if (value == null) {
-            return defaultValue;
-        }
-        if (value instanceof Boolean bool) {
-            return bool;
-        }
-        return Boolean.parseBoolean(value.toString().trim());
+    /**
+     * 本工具被限制在其中运行的沙箱。
+     */
+    public PathSandbox sandbox() {
+        return sandbox;
     }
 }

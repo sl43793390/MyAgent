@@ -6,9 +6,9 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Describes a parameter of a @Tool-annotated method.
+ * 描述带 @Tool 注解方法的某个参数。
  *
- * <p>Example usage:</p>
+ * <p>用法示例：</p>
  * <pre>
  * {@code
  * public String search(
@@ -25,18 +25,18 @@ import java.lang.annotation.Target;
 public @interface ToolParam {
 
     /**
-     * The name of the parameter. If not specified, the actual parameter name is used
-     * (requires -parameters compiler flag).
+     * 参数的名称。若未指定，则使用实际的参数名
+     * （需要 -parameters 编译器参数）。
      */
     String name() default "";
 
     /**
-     * A human-readable description of the parameter.
+     * 参数的可读描述。
      */
     String description() default "";
 
     /**
-     * Whether this parameter is required.
+     * 该参数是否为必填。
      */
     boolean required() default true;
 }

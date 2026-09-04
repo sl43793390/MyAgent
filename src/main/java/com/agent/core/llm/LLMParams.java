@@ -1,10 +1,10 @@
 package com.agent.core.llm;
 
 /**
- * LLM model parameters configuration.
- * Use the builder to create instances.
+ * 大模型参数配置。
+ * 请使用 builder 创建实例。
  *
- * Example:
+ * 示例：
  * <pre>
  * {@code
  * LLMParams params = LLMParams.builder()
@@ -29,19 +29,19 @@ public record LLMParams(
     public static final int DEFAULT_MAX_COMPLETION_TOKENS = 4096;
 
     /**
-     * Default parameters: temperature=0.7, maxCompletionTokens=4096.
+     * 默认参数：temperature=0.7，maxCompletionTokens=4096。
      */
     public static final LLMParams DEFAULT = builder().build();
 
     /**
-     * Temperature actually applied to the LLM call: the configured value or the default.
+     * 实际应用到本次大模型调用的 temperature：配置值，若未配置则取默认值。
      */
     public double effectiveTemperature() {
         return temperature != null ? temperature : DEFAULT_TEMPERATURE;
     }
 
     /**
-     * Max completion tokens actually applied to the LLM call: the configured value or the default.
+     * 实际应用到本次大模型调用的最大补全 Token 数：配置值，若未配置则取默认值。
      */
     public int effectiveMaxCompletionTokens() {
         return maxCompletionTokens != null ? maxCompletionTokens : DEFAULT_MAX_COMPLETION_TOKENS;
@@ -52,7 +52,7 @@ public record LLMParams(
     }
 
     /**
-     * Create params with only temperature set.
+     * 创建一个仅设置 temperature 的参数对象。
      */
     public static LLMParams withTemperature(double temperature) {
         return builder().temperature(temperature).build();
@@ -70,7 +70,7 @@ public record LLMParams(
         private Builder() {}
 
         /**
-         * Controls randomness: 0.0 to 2.0. Lower = more deterministic.
+         * 控制随机性：范围 0.0 到 2.0，值越小输出越确定。
          */
         public Builder temperature(double temperature) {
             this.temperature = temperature;
@@ -78,7 +78,7 @@ public record LLMParams(
         }
 
         /**
-         * Nucleus sampling parameter: 0.0 to 1.0.
+         * 核采样（nucleus sampling）参数：范围 0.0 到 1.0。
          */
         public Builder topP(double topP) {
             this.topP = topP;
@@ -86,7 +86,7 @@ public record LLMParams(
         }
 
         /**
-         * Maximum number of tokens in the completion.
+         * 补全中允许生成的最大 Token 数。
          */
         public Builder maxCompletionTokens(int maxCompletionTokens) {
             this.maxCompletionTokens = maxCompletionTokens;
@@ -94,7 +94,7 @@ public record LLMParams(
         }
 
         /**
-         * Penalizes tokens based on their frequency in the text so far.
+         * 根据 Token 在当前文本中出现的频率施加惩罚，降低重复。
          */
         public Builder frequencyPenalty(double frequencyPenalty) {
             this.frequencyPenalty = frequencyPenalty;
@@ -102,7 +102,7 @@ public record LLMParams(
         }
 
         /**
-         * Penalizes tokens based on whether they appear in the text so far.
+         * 根据 Token 是否已出现在当前文本中施加惩罚，鼓励引入新话题。
          */
         public Builder presencePenalty(double presencePenalty) {
             this.presencePenalty = presencePenalty;
@@ -110,7 +110,7 @@ public record LLMParams(
         }
 
         /**
-         * Seed for deterministic output.
+         * 用于生成确定性输出的随机种子。
          */
         public Builder seed(long seed) {
             this.seed = seed;
@@ -118,7 +118,7 @@ public record LLMParams(
         }
 
         /**
-         * Stop sequence where the model should stop generating.
+         * 模型应当停止生成的终止序列。
          */
         public Builder stop(String stop) {
             this.stop = stop;

@@ -1,7 +1,10 @@
 package com.agent.core.tool.builtin;
 
+import com.agent.core.security.PathSandbox;
+import com.agent.core.tool.RiskLevel;
 import com.agent.core.tool.Tool;
 import com.agent.core.tool.ToolDefinition;
+import com.agent.core.tool.ToolResult;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,11 +17,31 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Built-in tool for editing a file by replacing an exact string with a new one.
+ * 替换文件中一段精确匹配的字符串。
+ *
+ * <p>要求 {@code old_string} 唯一，正是这一约束让由模型驱动的编辑变得安全：模型必须引用它打算修改的
+ * 文本，而不能「整文件重写」（那样会让幻觉悄无声息地删除内容）。如果引用匹配到多处，编辑会被拒绝，
+ * 并提示模型补充上下文——从而让歧义永远不会演变成错误的修改。
  */
 public class FileEditTool implements Tool {
 
     private static final Logger log = LoggerFactory.getLogger(FileEditTool.class);
+
+    private static final long MAX_FILE_BYTES = 5L * 1024 * 1024;
+
+    private final PathSandbox sandbox;
+
+    /** 在进程当前工作目录范围内编辑文件。 */
+    public FileEditTool() {
+        this(PathSandbox.currentDirectory());
+    }
+
+    /**
+     * @param sandbox 本工具允许编辑的目录边界
+     */
+    public FileEditTool(PathSandbox sandbox) {
+        this.sandbox = sandbox != null ? sandbox : PathSandbox.currentDirectory();
+    }
 
     @Override
     public ToolDefinition getDefinition() {
@@ -57,56 +80,81 @@ public class FileEditTool implements Tool {
     }
 
     @Override
-    public String execute(Map<String, Object> arguments) {
-        String pathStr = getStringArg(arguments, "path");
-        if (pathStr == null || pathStr.isBlank()) {
-            return "Error: 'path' parameter is required";
+    public ToolResult execute(Map<String, Object> arguments) {
+        Path path;
+        try {
+            path = Args.path(sandbox, arguments, "path");
+        } catch (SecurityException e) {
+            log.warn("Rejected file_edit: {}", e.getMessage());
+            return ToolResult.failure(e.getMessage());
         }
 
-        String oldStr = getStringArg(arguments, "old_string");
-        if (oldStr == null || oldStr.isEmpty()) {
-            return "Error: 'old_string' parameter is required and must not be empty";
+        String oldStr = Args.string(arguments, "old_string");
+        if (oldStr == null) {
+            return ToolResult.retryable("Error: 'old_string' parameter is required and must not be empty");
         }
-
-        String newStr = getStringArg(arguments, "new_string");
+        String newStr = Args.string(arguments, "new_string");
         if (newStr == null) {
-            return "Error: 'new_string' parameter is required";
+            return ToolResult.retryable("Error: 'new_string' parameter is required");
         }
 
-        boolean replaceAll = getBoolArg(arguments.get("all"), false);
+        boolean replaceAll = Args.bool(arguments, "all", false);
 
-        Path path = Path.of(pathStr);
         if (!Files.exists(path)) {
-            return "Error: file does not exist: " + pathStr;
+            return ToolResult.failure("Error: file does not exist: " + path);
+        }
+        if (Files.isDirectory(path)) {
+            return ToolResult.failure("Error: path is a directory, not a file: " + path);
         }
 
         try {
+            long size = Files.size(path);
+            if (size > MAX_FILE_BYTES) {
+                return ToolResult.failure("Error: file is too large to edit ("
+                        + size + " bytes, limit is " + MAX_FILE_BYTES + ")");
+            }
+
             String content = Files.readString(path, StandardCharsets.UTF_8);
 
-            int count = countOccurrences(content, oldStr);
-            if (count == 0) {
-                return "Error: 'old_string' not found in file: " + pathStr;
+            int occurrences = countOccurrences(content, oldStr);
+            if (occurrences == 0) {
+                return ToolResult.retryable("Error: 'old_string' not found in " + path
+                        + ". Read the file again and quote the text exactly.");
             }
-            if (count > 1 && !replaceAll) {
-                return "Error: 'old_string' occurs " + count + " times in file " + pathStr
-                        + ". Provide more surrounding context to make it unique, or set 'all' to true to replace every occurrence.";
+            if (occurrences > 1 && !replaceAll) {
+                return ToolResult.retryable("Error: 'old_string' occurs " + occurrences
+                        + " times in " + path
+                        + ". Provide more surrounding context to make it unique, "
+                        + "or set 'all' to true to replace every occurrence.");
             }
 
             String updated = replaceAll
                     ? content.replace(oldStr, newStr)
                     : content.replaceFirst(Pattern.quote(oldStr), Matcher.quoteReplacement(newStr));
 
-            Files.writeString(path, updated, StandardCharsets.UTF_8);
+            // 先写入同一目录下的临时文件，再将其移动到位，这样即使写入中途被打断，
+            // 也不会留下只写了一半的文件。
+            Path directory = path.getParent();
+            Path temp = Files.createTempFile(directory, ".agent-edit-", ".tmp");
+            try {
+                Files.writeString(temp, updated, StandardCharsets.UTF_8);
+                Files.move(temp, path, java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                        java.nio.file.StandardCopyOption.ATOMIC_MOVE);
+            } finally {
+                Files.deleteIfExists(temp);
+            }
 
-            log.debug("Replaced {} occurrence(s) in {}", count, pathStr);
-            return "Successfully replaced " + (replaceAll ? count : 1) + " occurrence(s) in " + pathStr;
+            log.info("Replaced {} occurrence(s) in {}", replaceAll ? occurrences : 1, path);
+            return ToolResult.success("Successfully replaced "
+                    + (replaceAll ? occurrences : 1) + " occurrence(s) in " + path);
+
         } catch (IOException e) {
-            log.error("Failed to edit file '{}': {}", pathStr, e.getMessage());
-            return "Error editing file: " + e.getMessage();
+            log.error("Failed to edit '{}': {}", path, e.getMessage());
+            return ToolResult.failure("Error editing file: " + e.getMessage());
         }
     }
 
-    private int countOccurrences(String content, String target) {
+    private static int countOccurrences(String content, String target) {
         int count = 0;
         int index = 0;
         while ((index = content.indexOf(target, index)) != -1) {
@@ -116,18 +164,15 @@ public class FileEditTool implements Tool {
         return count;
     }
 
-    private String getStringArg(Map<String, Object> arguments, String name) {
-        Object value = arguments.get(name);
-        return value != null ? value.toString() : null;
+    @Override
+    public RiskLevel riskLevel() {
+        return RiskLevel.SENSITIVE;
     }
 
-    private boolean getBoolArg(Object value, boolean defaultValue) {
-        if (value == null) {
-            return defaultValue;
-        }
-        if (value instanceof Boolean bool) {
-            return bool;
-        }
-        return Boolean.parseBoolean(value.toString().trim());
+    /**
+     * 本工具被限制在其中运行的沙箱。
+     */
+    public PathSandbox sandbox() {
+        return sandbox;
     }
 }

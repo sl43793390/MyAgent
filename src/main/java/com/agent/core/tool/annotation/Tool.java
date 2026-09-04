@@ -6,10 +6,10 @@ import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
 /**
- * Marks a method as a tool that can be invoked by the agent.
- * Similar to Spring AI's @Tool annotation.
+ * 将一个方法标记为可供智能体调用的工具。
+ * 类似于 Spring AI 的 @Tool 注解。
  *
- * <p>Example usage:</p>
+ * <p>用法示例：</p>
  * <pre>
  * {@code
  * @Tool(name = "calculator", description = "Evaluate a mathematical expression")
@@ -24,12 +24,12 @@ import java.lang.annotation.Target;
 public @interface Tool {
 
     /**
-     * The name of the tool. If not specified, the method name is used.
+     * 工具的名称。若未指定，则使用方法名。
      */
     String name() default "";
 
     /**
-     * A human-readable description of what the tool does.
+     * 对工具功能的可读描述。
      */
     String description() default "";
 }

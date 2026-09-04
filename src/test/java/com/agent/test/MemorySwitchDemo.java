@@ -36,7 +36,7 @@ public class MemorySwitchDemo {
         demoMySQL();
     }
 
-    // ========== Demo 1: InMemoryStore（默认，无需额外配置） ==========
+    // ========== 演示 1：InMemoryStore（默认，无需额外配置） ==========
 
     public static void demoInMemory() {
         System.out.println("====== Demo 1: InMemoryStore（默认） ======");
@@ -63,7 +63,7 @@ public class MemorySwitchDemo {
         System.out.println();
     }
 
-    // ========== Demo 2: RedisMemory ==========
+    // ========== 演示 2：RedisMemory ==========
 
     public static void demoRedis() {
         System.out.println("====== Demo 2: RedisMemory ======");
@@ -111,7 +111,7 @@ public class MemorySwitchDemo {
         System.out.println();
     }
 
-    // ========== Demo 3: MySQLMemory ==========
+    // ========== 演示 3：MySQLMemory ==========
 
     public static void demoMySQL() {
         System.out.println("====== Demo 3: MySQLMemory ======");

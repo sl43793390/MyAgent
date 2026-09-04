@@ -10,9 +10,9 @@ import java.lang.reflect.Parameter;
 import java.util.*;
 
 /**
- * Scans objects for @Tool-annotated methods and registers them into a ToolRegistry.
+ * 扫描对象中带 @Tool 注解的方法，并将其注册到 ToolRegistry。
  *
- * <p>Usage:</p>
+ * <p>用法：</p>
  * <pre>
  * {@code
  * ToolRegistry registry = new ToolRegistry();
@@ -32,9 +32,9 @@ public class AnnotationToolProcessor {
     }
 
     /**
-     * Scan the given object for @Tool-annotated methods and register them.
+     * 扫描指定对象中带 @Tool 注解的方法并进行注册。
      *
-     * @param bean the object to scan
+     * @param bean 待扫描的对象
      */
     public void register(Object bean) {
         Class<?> clazz = bean.getClass();
@@ -59,7 +59,7 @@ public class AnnotationToolProcessor {
     }
 
     /**
-     * Scan multiple objects.
+     * 扫描多个对象。
      */
     public void registerAll(Object... beans) {
         for (Object bean : beans) {

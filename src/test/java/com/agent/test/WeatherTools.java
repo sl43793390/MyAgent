@@ -4,7 +4,7 @@ import com.agent.core.tool.annotation.Tool;
 import com.agent.core.tool.annotation.ToolParam;
 
 /**
- * Example custom tool class for weather queries.
+ * 天气查询的自定义工具示例类。
  */
 class WeatherTools {
 
@@ -12,7 +12,7 @@ class WeatherTools {
     public String getWeather(
             @ToolParam(name = "city", description = "City name") String city
     ) {
-        // Mock implementation - in real scenario, call weather API
+        // 模拟实现——实际场景中应调用天气 API
         return String.format("Weather in %s: 22°C, Sunny, Humidity: 45%%", city);
     }
 
